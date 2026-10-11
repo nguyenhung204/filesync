@@ -24,6 +24,13 @@ type connPump struct {
 	wake    chan struct{} // closed+replaced on every (un)subscribe
 	pending []proto.Message
 	dead    chan struct{}
+
+	// activity is closed (and replaced) whenever a message is
+	// queued while no round is subscribed: the peer is trying to
+	// start a round while our side is idle between rounds, and
+	// the daemon's session loop should wake up for it instead of
+	// waiting for its idle tick.
+	activity chan struct{}
 }
 
 // pumpPendingCap bounds control messages queued between rounds.
@@ -45,9 +52,10 @@ func (e *Engine) pumpFor(conn SessionConn) *connPump {
 		}
 	}
 	p := &connPump{
-		conn: conn,
-		wake: make(chan struct{}),
-		dead: make(chan struct{}),
+		conn:     conn,
+		wake:     make(chan struct{}),
+		dead:     make(chan struct{}),
+		activity: make(chan struct{}),
 	}
 	e.pumps[conn] = p
 	go p.run(e)
@@ -89,6 +97,8 @@ func (p *connPump) deliver(m proto.Message) bool {
 				if len(p.pending) < pumpPendingCap {
 					p.pending = append(p.pending, m)
 				}
+				close(p.activity)
+				p.activity = make(chan struct{})
 			}
 			p.mu.Unlock()
 			return true
@@ -104,6 +114,17 @@ func (p *connPump) deliver(m proto.Message) bool {
 			return false
 		}
 	}
+}
+
+// Activity returns a channel closed when control traffic arrives
+// while no round is subscribed (see the activity field). Callers
+// re-fetch it after every wake; the daemon's session loop selects
+// on it between rounds.
+func (e *Engine) Activity(conn SessionConn) <-chan struct{} {
+	p := e.pumpFor(conn)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.activity
 }
 
 // subscribe attaches a fresh inbox and flushes queued control

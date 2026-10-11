@@ -28,7 +28,7 @@ const (
 	statusInterval  = 2 * time.Second
 	mailboxInterval = 500 * time.Millisecond
 	reconcileEvery  = 2 * time.Second
-	connRoundIdle   = 2 * time.Second
+	connRoundIdle   = 5 * time.Second // backstop only; dirty + peer activity wake sooner
 )
 
 // peerRuntime tracks one peer's connection bookkeeping for status

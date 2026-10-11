@@ -252,9 +252,10 @@ func (d *Daemon) sessionLoop(ctx context.Context, conn *transport.Conn) {
 	}
 }
 
-// waitRoundWake blocks until local state changed (dirty broadcast),
-// a short idle tick elapses (peer state may have changed — a round
-// is cheap when indexes are equal), or the conn/ctx dies.
+// waitRoundWake blocks until: local state changed (dirty
+// broadcast), the peer tried to start a round while we were idle
+// (pump activity — its index request is already queued for us), a
+// slow idle tick elapses (backstop), or the conn/ctx dies.
 func (d *Daemon) waitRoundWake(ctx context.Context, conn *transport.Conn) bool {
 	t := time.NewTimer(connRoundIdle)
 	defer t.Stop()
@@ -264,6 +265,8 @@ func (d *Daemon) waitRoundWake(ctx context.Context, conn *transport.Conn) bool {
 	case <-conn.Context().Done():
 		return false
 	case <-d.dirtyChan():
+		return true
+	case <-d.eng.Activity(conn):
 		return true
 	case <-t.C:
 		return true
