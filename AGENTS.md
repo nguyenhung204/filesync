@@ -3,7 +3,7 @@
 ## Stack
 - Go 1.27 (toolchain at `~/workspace/tools/go/bin/go` on the dev machine; `export PATH=$HOME/workspace/tools/go/bin:$PATH`).
 - SQLite (WAL) for metadata via pure-Go driver `modernc.org/sqlite` (keeps a static, CGO-free binary).
-- Allowed deps (approved via tech-selection, see docs/adr/): `github.com/fsnotify/fsnotify`, mDNS lib (per ADR-001 note), `golang.org/x/time` if needed. NO other dependency without an ADR update + user approval for important ones.
+- Allowed deps (approved via tech-selection, see docs/adr/): `github.com/fsnotify/fsnotify`, mDNS lib (per ADR-001 note), `golang.org/x/time` if needed, plus `golang.org/x/text/unicode/norm` ONLY for NFC normalization in `internal/validate` (stdlib has no Unicode normalization; approved in job 001 spec). NO other dependency without an ADR update + user approval for important ones.
 - Module name: `filesync`. Packages under `internal/`, entrypoint `cmd/filesync`.
 
 ## Commands
