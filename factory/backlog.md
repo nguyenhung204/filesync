@@ -22,3 +22,4 @@
 - [ ] Phase 2: cân nhắc hạ trần entry index 1M (spike heap ~471MiB khi bị flood — security round 2 job 004).
 - [ ] NIT: `restore --version=` (rỗng) nên báo lỗi tham số thay vì lặng lẽ về bản mới nhất (approver job 004b).
 - [x] Job 004b: CLI history/restore + dòng README fsync — XONG (merge 2026-10-11).
+- [ ] ƯU TIÊN — job 005b vá bộ cài Windows (phát hiện khi user cài thật 2026-10-11): install-service.ps1 chứa em-dash UTF-8 không BOM → Windows PowerShell 5.1 đọc ANSI làm hỏng parser (byte 0x94 thành dấu ngoặc kép), service không được tạo (lỗi 1060) mà .bat vẫn in "cài đặt xong". Việc: scripts .ps1 về ASCII thuần + kiểm tra exit code của sc.exe start + chờ/xác nhận service RUNNING; cai-dat .bat kiểm tra service tồn tại sau khi nâng quyền, lỗi thì báo rõ thay vì in thành công vô điều kiện. Daemon chạy tiền cảnh trên Windows thật đã kiểm chứng OK.
