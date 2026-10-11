@@ -137,8 +137,13 @@ func Open(dir string) (*Store, error) {
 		return nil, err
 	}
 	// The DB holds the sync index (a map of the user's files) — treat it
-	// as sensitive: 0600 on Unix, best-effort like config/identity.
+	// as sensitive: 0600 on Unix, best-effort like config/identity. The
+	// WAL and shared-memory sidecars hold the same index data (recent
+	// writes live only in -wal until a checkpoint), so they get the same
+	// tightening; the 0700 config directory remains the outer barrier.
 	_ = os.Chmod(path, 0o600)
+	_ = os.Chmod(path+"-wal", 0o600)
+	_ = os.Chmod(path+"-shm", 0o600)
 	return s, nil
 }
 
