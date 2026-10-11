@@ -14,7 +14,6 @@ import (
 	"math/rand/v2"
 	"net"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -125,7 +124,9 @@ type Manager struct {
 
 	limiter *rate.Limiter // nil = unlimited
 	disc    Discovery
-	gate    atomic.Value // holds PairingGate
+
+	gateMu sync.RWMutex
+	gate   PairingGate
 
 	mu        sync.Mutex
 	conns     map[string]map[*Conn]struct{}
@@ -161,11 +162,17 @@ func NewManager(id *identity.Identity, cfg config.Config, trust TrustSource, log
 
 // SetPairingGate installs the pairing gate consulted for every
 // untrusted inbound connection.
-func (m *Manager) SetPairingGate(g PairingGate) { m.gate.Store(g) }
+func (m *Manager) SetPairingGate(g PairingGate) {
+	m.gateMu.Lock()
+	m.gate = g
+	m.gateMu.Unlock()
+}
 
 func (m *Manager) pairingOpen() bool {
-	g, ok := m.gate.Load().(PairingGate)
-	return ok && g != nil && g.PairingOpen()
+	m.gateMu.RLock()
+	g := m.gate
+	m.gateMu.RUnlock()
+	return g != nil && g.PairingOpen()
 }
 
 // Addr returns the actual bound listen address once Serve is running

@@ -55,12 +55,16 @@ func (c *Conn) RemoteAddr() string {
 // id and peer id, and is cancelled when the connection closes.
 func (c *Conn) Context() context.Context { return c.ctx }
 
-// Close closes the connection and cancels its context. Idempotent.
+// Close closes the connection, cancels its context, and removes the
+// connection from the manager's registry (freeing its per-peer slot).
+// Idempotent; the registry removal is itself idempotent, so the
+// accept path's explicit unregister remains safe.
 func (c *Conn) Close() error {
 	var err error
 	c.once.Do(func() {
 		c.cancel()
 		err = c.nc.Close()
+		c.mgr.unregister(c)
 	})
 	return err
 }

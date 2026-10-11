@@ -45,10 +45,11 @@ func (m *Manager) HandleConn(ctx context.Context, c *transport.Conn) {
 	defer c.Close()
 	ctx = c.Context()
 	initiatorID := c.PeerID()
+	sessID := "" // set once the challenge is out; rejects before that carry none
 
 	reject := func(code string) {
 		_ = c.WriteMessage(ctx, proto.Message{Header: proto.Header{
-			Type: proto.TypePairReject, Code: code,
+			Type: proto.TypePairReject, Code: code, SessionID: sessID,
 		}})
 	}
 
@@ -121,6 +122,7 @@ func (m *Manager) HandleConn(ctx context.Context, c *transport.Conn) {
 		reject(proto.CodeInternal)
 		return
 	}
+	sessID = sessionID
 	if err := c.WriteMessage(ctx, proto.Message{Header: proto.Header{
 		Type: proto.TypePairChallenge, SessionID: sessionID,
 		Nonce: base64.StdEncoding.EncodeToString(nonceB),

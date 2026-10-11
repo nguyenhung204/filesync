@@ -26,8 +26,8 @@ const ProtocolVersion = 1
 // Size limits. A peer-supplied length never controls allocation beyond
 // these bounds (threat 3 in docs/threats.md).
 const (
-	MaxHeaderBytes       = 64 << 10  // 64 KiB
-	MaxIndexPayloadBytes = 4 << 20   // 4 MiB
+	MaxHeaderBytes       = 64 << 10 // 64 KiB
+	MaxIndexPayloadBytes = 4 << 20  // 4 MiB
 	MaxFrameBytes        = 2 + MaxHeaderBytes + MaxIndexPayloadBytes
 	MaxIndexBatch        = 1000 // entries per Index message
 	MaxChunkIndexes      = 1024 // indexes per ChunkRequest
@@ -106,7 +106,7 @@ func isPairType(t Type) bool {
 // not apply to a message type stay empty (omitempty).
 type Header struct {
 	Type     Type   `json:"type"`
-	Protocol int    `json:"protocol,omitempty"` // hello only: ProtocolVersion
+	Protocol int    `json:"protocol,omitempty"`  // hello only: ProtocolVersion
 	DeviceID string `json:"device_id,omitempty"` // hello, pair_request
 	Name     string `json:"name,omitempty"`      // hello, pair_request (≤ 128 bytes)
 	// index
@@ -160,9 +160,12 @@ func (m Message) Validate() error {
 	if len(m.Payload) > 0 && h.Type != TypeIndex && h.Type != TypeChunkData {
 		return badf("type %s must not carry a payload", h.Type)
 	}
-	// Pairing fields shared by all Pair* types.
+	// Pairing fields shared by all Pair* types. PairReject is exempt
+	// from the session_id requirement: rejections also occur before a
+	// session exists (unknown/expired code at the PairRequest step,
+	// spec Flows B and C).
 	if isPairType(h.Type) {
-		if h.Type != TypePairRequest && h.SessionID == "" {
+		if h.Type != TypePairRequest && h.Type != TypePairReject && h.SessionID == "" {
 			return badf("type %s requires session_id", h.Type)
 		}
 		if err := checkB64Field("nonce", h.Nonce); err != nil {

@@ -42,8 +42,8 @@ const codeJournalKey = "pairing:current"
 // the same fail-safe direction as spec D7 for pending confirmations:
 // pairing is redone from the start.
 type codeRecord struct {
-	Salt      []byte `json:"salt"`      // 16 bytes from crypto/rand
-	CodeHash  []byte `json:"code_hash"` // SHA-256(salt || code)
+	Salt      []byte `json:"salt"`       // 16 bytes from crypto/rand
+	CodeHash  []byte `json:"code_hash"`  // SHA-256(salt || code)
 	ExpiresAt int64  `json:"expires_at"` // UnixNano, local wall clock (D8)
 	Attempts  int    `json:"attempts"`
 	BoundID   string `json:"bound_id,omitempty"` // first initiator to reach the challenge step

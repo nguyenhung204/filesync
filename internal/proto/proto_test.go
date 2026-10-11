@@ -50,6 +50,7 @@ func validMessages(t *testing.T) []Message {
 		{Header: Header{Type: TypePairConfirm, SessionID: "sess"}},
 		{Header: Header{Type: TypePairFinal, SessionID: "sess"}},
 		{Header: Header{Type: TypePairReject, SessionID: "sess", Code: CodeBadProof}},
+		{Header: Header{Type: TypePairReject, Code: CodePairingUnavailable}}, // pre-session reject
 	}
 }
 
