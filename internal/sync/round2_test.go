@@ -155,6 +155,99 @@ func TestSessionMetaTreeCaseAndDepthVariantsRejected(t *testing.T) {
 	}
 }
 
+// TestSessionMetaTreeDotlessIVariantsRejected is the regression
+// test for the round-3 security review's last open variant:
+// U+0131 (dotless ı). Go's strings.EqualFold has no fold mapping
+// for U+0131 — it folds to itself — so ".fılesync/..." passed
+// isMetaTreePath even after the round-3 fix. But Windows
+// compares file names through its $UpCase table, built from
+// Unicode UPPERCASE mappings, where ı maps to I: on Windows
+// ".fılesync" IS the real metadata tree, and the round-1
+// version-forgery payload still landed. The fix adds an
+// uppercase comparison to the shared helper
+// (strings.ToUpper(seg) == strings.ToUpper(MetaDir)), which
+// maps ı→I exactly like $UpCase. Both a live forgery entry and
+// a winning tombstone must be rejected: no file on disk, no
+// entry adopted into the store, bad_remote_path recorded —
+// while the honest entry in the same batch still syncs.
+//
+// The control path locks the opposite boundary: ".FİLESYNC"
+// with U+0130 (İ) must NOT be rejected. U+0130 has no uppercase
+// mapping and no case fold on any target filesystem (NTFS,
+// APFS, ext4-casefold all treat it as a different name), so it
+// is just an odd directory name; blocking it would be
+// over-blocking. The ToUpper facts both assertions rest on are
+// pinned first, so a future Unicode-table change fails loudly
+// here instead of silently reopening or widening the guard.
+func TestSessionMetaTreeDotlessIVariantsRejected(t *testing.T) {
+	if got := strings.ToUpper(".f\u0131lesync"); got != ".FILESYNC" {
+		t.Fatalf("strings.ToUpper(.fılesync) = %q, want .FILESYNC (ı must map to I)", got)
+	}
+	if strings.ToUpper(".F\u0130LESYNC") == strings.ToUpper(".filesync") {
+		t.Fatal("strings.ToUpper folds U+0130 onto .filesync; the control below would be over-blocked")
+	}
+
+	n := newTestNode(t)
+	good := []byte("fine")
+	goodMetas := metasOf(good)
+	pwn := []byte("PWNED")
+	pwnMetas := metasOf(pwn)
+
+	liveMeta := ".f\u0131lesync/versions/notes.txt/v9-fake"
+	tombMeta := ".f\u0131lesync/trash/fake.txt"
+	control := ".F\u0130LESYNC/planted.txt"
+
+	tomb := remoteEntry(tombMeta, nil, 0)
+	tomb.Tombstone = true
+	tomb.TombstoneTs = 4242
+
+	entries := []store.Entry{
+		remoteEntry("good.txt", goodMetas, int64(len(good))),
+		remoteEntry(control, goodMetas, int64(len(good))),
+		remoteEntry(liveMeta, pwnMetas, int64(len(pwn))),
+		tomb,
+	}
+	contents := map[string][]byte{
+		"good.txt": good,
+		control:    good,
+		liveMeta:   pwn,
+	}
+	p := newScriptPeer(entries, contents)
+	runScriptedRound(t, n, p)
+
+	if data := readFile(t, n.root, "good.txt"); !bytes.Equal(data, good) {
+		t.Fatal("honest entry in the same index as dotless-ı variants was not pulled")
+	}
+	// Control: U+0130 is a distinct name on every target
+	// filesystem, so it syncs like any other honest entry.
+	if data := readFile(t, n.root, control); !bytes.Equal(data, good) {
+		t.Fatal("U+0130 control entry was blocked; ToUpper change over-blocks")
+	}
+	if _, found, err := n.st.GetEntry(control); err != nil || !found {
+		t.Fatalf("U+0130 control entry missing from the local index (found=%v err=%v)", found, err)
+	}
+
+	for _, mp := range []string{liveMeta, tombMeta} {
+		if _, err := os.Stat(filepath.Join(n.root, filepath.FromSlash(mp))); !os.IsNotExist(err) {
+			t.Fatalf("peer planted a file via dotless-ı meta variant: %s", mp)
+		}
+		if _, found, err := n.st.GetEntry(mp); err != nil || found {
+			t.Fatalf("dotless-ı meta variant entered the local index: %s (found=%v err=%v)", mp, found, err)
+		}
+	}
+	recorded := map[string]bool{}
+	for _, se := range n.eng.LastErrors() {
+		if se.Code == "bad_remote_path" {
+			recorded[se.Path] = true
+		}
+	}
+	for _, mp := range []string{liveMeta, tombMeta} {
+		if !recorded[mp] {
+			t.Fatalf("no bad_remote_path recorded for %s: %+v", mp, n.eng.LastErrors())
+		}
+	}
+}
+
 // floodPeer streams valid index batches with More=true forever
 // until the connection dies. It models the round-1 IMPORTANT 2
 // attacker: every per-message limit passes; only an accumulated

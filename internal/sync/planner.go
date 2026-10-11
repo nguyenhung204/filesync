@@ -290,9 +290,21 @@ func chunkListKey(chunks []chunk.ChunkMeta) string {
 // executor). Every segment is compared case-insensitively:
 // Windows and macOS filesystems are case-insensitive by
 // default, so ".Filesync" there IS the real metadata tree.
+// Two folding mechanisms are checked because the platforms do
+// not fold names the same way: EqualFold covers ordinary
+// Unicode case folding, but Go's fold tables have no mapping
+// for U+0131 (dotless ı) — it folds to itself — while Windows
+// compares names through its $UpCase table, built from
+// Unicode UPPERCASE mappings, where ı maps to I. So on
+// Windows ".fılesync" also IS the real metadata tree. The
+// ToUpper comparison catches exactly that family (ı→I, and
+// ſ→S which NTFS upcase also equates); U+0130 (İ) has no
+// uppercase mapping at all, so it stays a distinct, harmless
+// name on every target filesystem and is NOT rejected.
 func isMetaTreePath(p string) bool {
+	metaUpper := strings.ToUpper(history.MetaDir)
 	for _, seg := range strings.Split(p, "/") {
-		if strings.EqualFold(seg, history.MetaDir) {
+		if strings.EqualFold(seg, history.MetaDir) || strings.ToUpper(seg) == metaUpper {
 			return true
 		}
 	}
