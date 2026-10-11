@@ -16,3 +16,4 @@
 - [ ] README giới hạn đã biết (job 004): mDNS thật trên LAN chưa test được trong môi trường dev (test env-gated FILESYNC_TEST_MDNS=1); restart daemon giữa lúc pairing làm mất cửa mã (codeKey chỉ trong RAM — fail-safe có chủ đích).
 - [ ] Job 004: daemon dùng transport.DefaultOptions() (không tự đặt MDNS=false bằng bool zero).
 - [ ] Job 004 lưu ý từ approver job 003: chữ ký DialPair(ctx, tm, addr, code); phía acceptor KHÔNG lưu Addresses của initiator — phiên sync phải chạy 2 chiều trên cùng kết nối đã mở, không trông chờ dial-back theo địa chỉ nguồn (cổng ephemeral).
+- [ ] Phòng thủ chiều sâu: DecompressChunkPayload tự kiểm trần MaxGzipPayloadBytes + khoảng Size khi caller bỏ qua Validate (approver job 004a).
