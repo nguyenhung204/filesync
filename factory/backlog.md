@@ -20,3 +20,5 @@
 - [ ] ƯU TIÊN CAO — job 004b: CLI `history` + `restore` (tầng engine đã có, thiếu bề mặt CLI) + bổ sung 1 dòng README về nợ fsync đường pull (điều kiện của approver job 004).
 - [ ] Phase 2: store-op gộp "complete transfer" để giảm ~7 fsync/file ở đường pull (approver job 004).
 - [ ] Phase 2: cân nhắc hạ trần entry index 1M (spike heap ~471MiB khi bị flood — security round 2 job 004).
+- [ ] NIT: `restore --version=` (rỗng) nên báo lỗi tham số thay vì lặng lẽ về bản mới nhất (approver job 004b).
+- [x] Job 004b: CLI history/restore + dòng README fsync — XONG (merge 2026-10-11).
