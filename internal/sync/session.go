@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
-	"filesync/internal/logx"
 	"filesync/internal/proto"
 	"filesync/internal/store"
 	"filesync/internal/validate"
@@ -47,6 +47,11 @@ type session struct {
 	failCh  map[string]chan struct{}
 	remote  []store.Entry
 
+	// snap is the round-start local index snapshot: the only index
+	// this round sends or serves from (see sendIndex).
+	snap       map[string]store.Entry
+	snapSorted []store.Entry
+
 	serveWG   sync.WaitGroup
 	indexDone chan struct{}
 	indexOnce sync.Once
@@ -54,8 +59,8 @@ type session struct {
 	ackOnce   sync.Once
 }
 
-func newSession(e *Engine, conn SessionConn, ctx context.Context) *session {
-	return &session{
+func newSession(e *Engine, conn SessionConn, ctx context.Context, snapshot []store.Entry) *session {
+	s := &session{
 		e:         e,
 		conn:      conn,
 		ctx:       ctx,
@@ -63,7 +68,21 @@ func newSession(e *Engine, conn SessionConn, ctx context.Context) *session {
 		failCh:    make(map[string]chan struct{}),
 		indexDone: make(chan struct{}),
 		peerAcked: make(chan struct{}),
+		snap:      make(map[string]store.Entry, len(snapshot)),
 	}
+	s.snapSorted = append(s.snapSorted, snapshot...)
+	sort.Slice(s.snapSorted, func(i, j int) bool { return s.snapSorted[i].Path < s.snapSorted[j].Path })
+	for _, en := range snapshot {
+		s.snap[en.Path] = en
+	}
+	return s
+}
+
+func (s *session) snapshotList() []store.Entry { return s.snapSorted }
+
+func (s *session) snapshotEntry(path string) (store.Entry, bool) {
+	en, ok := s.snap[path]
+	return en, ok
 }
 
 func (s *session) peerID() string { return s.conn.PeerID() }
@@ -81,7 +100,15 @@ func (e *Engine) RunSession(ctx context.Context, conn SessionConn) error {
 	defer stop()
 	defer cancel()
 
-	s := newSession(e, conn, sctx)
+	// Snapshot the local index BEFORE anything else: this round's
+	// plan, index replies, and chunk serves all speak about exactly
+	// this generation. Commits landing mid-round belong to the
+	// next round.
+	snapshot, err := e.st.ListEntries()
+	if err != nil {
+		return fmt.Errorf("sync: session %s: snapshot local index: %w", conn.PeerID(), err)
+	}
+	s := newSession(e, conn, sctx, snapshot)
 	go s.readLoop(cancel)
 
 	if err := conn.WriteMessage(sctx, proto.Message{Header: proto.Header{Type: proto.TypeIndexRequest}}); err != nil {
@@ -99,10 +126,7 @@ func (e *Engine) RunSession(ctx context.Context, conn SessionConn) error {
 		return fmt.Errorf("sync: session %s: %w", conn.PeerID(), sctx.Err())
 	}
 
-	local, err := e.st.ListEntries()
-	if err != nil {
-		return fmt.Errorf("sync: session %s: list local entries: %w", conn.PeerID(), err)
-	}
+	local := snapshot
 	s.mu.Lock()
 	remoteAll := append([]store.Entry(nil), s.remote...)
 	s.mu.Unlock()
@@ -165,7 +189,7 @@ func (s *session) readLoop(cancel context.CancelFunc) {
 			s.serveWG.Add(1)
 			go func() {
 				defer s.serveWG.Done()
-				s.sendIndex()
+				s.e.sendIndex(s, s.ctx)
 			}()
 		case proto.TypeIndex:
 			entries := decodeIndexPayload(m)
@@ -179,7 +203,7 @@ func (s *session) readLoop(cancel context.CancelFunc) {
 			s.serveWG.Add(1)
 			go func() {
 				defer s.serveWG.Done()
-				s.e.serveChunkRequest(s.ctx, s, m)
+				s.e.serveChunkRequest(s, s.ctx, m)
 			}()
 		case proto.TypeChunkData:
 			s.deliverChunk(m)
@@ -197,49 +221,6 @@ func (s *session) readLoop(cancel context.CancelFunc) {
 			// Hello/Pair*/Pong need no session handling.
 		}
 	}
-}
-
-// sendIndex answers an index_request with our full index, batched to
-// proto limits (≤1000 entries and ≤4MiB payload per message, D11).
-func (s *session) sendIndex() {
-	entries, err := s.e.st.ListEntries()
-	if err != nil {
-		s.e.log.Warn(s.ctx, "sync: list entries for index reply failed", logx.Err(err))
-		return
-	}
-	const payloadBudget = 3 << 20 // headroom under proto.MaxIndexPayloadBytes
-	var batch []store.Entry
-	batchBytes := 0
-	flush := func(more bool) bool {
-		if len(batch) == 0 && more {
-			return true
-		}
-		msg, err := proto.IndexMessage(batch, more)
-		if err != nil {
-			s.e.log.Warn(s.ctx, "sync: build index batch failed", logx.Err(err))
-			return false
-		}
-		if err := s.conn.WriteMessage(s.ctx, msg); err != nil {
-			return false
-		}
-		batch = nil
-		batchBytes = 0
-		return true
-	}
-	for _, en := range entries {
-		raw, err := json.Marshal(en)
-		if err != nil {
-			continue
-		}
-		if len(batch) > 0 && (len(batch) >= proto.MaxIndexBatch || batchBytes+len(raw) > payloadBudget) {
-			if !flush(true) {
-				return
-			}
-		}
-		batch = append(batch, en)
-		batchBytes += len(raw)
-	}
-	flush(false)
 }
 
 // decodeIndexPayload decodes an index message tolerantly: the strict
