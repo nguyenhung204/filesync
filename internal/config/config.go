@@ -34,7 +34,18 @@ type Config struct {
 	// config files written before it existed load fine; 0 means "use
 	// the default of 30" when the daemon reads it.
 	RescanIntervalSeconds int `json:"rescan_interval_seconds"`
+	// UIEnabled / UIPort configure the daemon's loopback web UI
+	// (job 006, additive like RescanIntervalSeconds): config files
+	// written before these existed load fine because Load starts
+	// from Default(). UIEnabled defaults to true; UIPort 0 means
+	// "use DefaultUIPort" wherever the port is read.
+	UIEnabled bool `json:"ui_enabled"`
+	UIPort    int  `json:"ui_port"`
 }
+
+// DefaultUIPort is the loopback port of the web UI when the config
+// does not name one.
+const DefaultUIPort = 22080
 
 func defaultConfigDir() string {
 	if dir, err := os.UserConfigDir(); err == nil && dir != "" {
@@ -70,7 +81,18 @@ func Default() Config {
 		VersionHistoryQuotaBytes: 1 << 30,
 		MaxPathLength:            DefaultMaxPathLength,
 		RescanIntervalSeconds:    30,
+		UIEnabled:                true,
+		UIPort:                   DefaultUIPort,
 	}
+}
+
+// EffectiveUIPort resolves the configured UI port: 0 means the
+// default port.
+func (c Config) EffectiveUIPort() int {
+	if c.UIPort == 0 {
+		return DefaultUIPort
+	}
+	return c.UIPort
 }
 
 // Load reads <configDir>/config.json over the defaults: fields absent from
@@ -139,6 +161,9 @@ func (c Config) Validate() error {
 	}
 	if c.RescanIntervalSeconds < 0 {
 		return fmt.Errorf("config: rescan_interval_seconds %d must be >= 0", c.RescanIntervalSeconds)
+	}
+	if c.UIPort < 0 || c.UIPort > 65535 {
+		return fmt.Errorf("config: ui_port %d out of range 0-65535 (0 = default %d)", c.UIPort, DefaultUIPort)
 	}
 	return nil
 }

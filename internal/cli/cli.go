@@ -70,6 +70,8 @@ parsed:
 		return cmdDevices(e, cmdArgs)
 	case "status":
 		return cmdStatus(e, cmdArgs)
+	case "ui":
+		return cmdUI(e, cmdArgs)
 	case "pause":
 		return cmdPause(e, cmdArgs, true)
 	case "resume":
@@ -106,6 +108,8 @@ Commands:
   devices              list paired devices
   devices revoke <id>  revoke a device (full ID or unique prefix >= 8 chars)
   status               daemon status (live from status.json, else offline)
+  ui                   open the web management UI in your browser
+                       (daemon must be running; prints the URL)
   pause / resume       pause or resume syncing (works with daemon down)
   conflicts            list conflict copies
   conflicts resolve <path> --keep mine|theirs [--conflict <path>]

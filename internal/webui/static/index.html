@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FileSync — Trang quản lý</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="app-header">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">⇄</span>
+    <div>
+      <div class="brand-name">FileSync</div>
+      <div class="brand-sub" id="header-device">Trang quản lý trên máy này</div>
+    </div>
+  </div>
+  <span id="conn-state" class="pill pill-gray"><span class="dot"></span>đang tải…</span>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button data-tab="overview" class="tab active">Tổng quan</button>
+  <button data-tab="peers" class="tab">Máy đã ghép đôi</button>
+  <button data-tab="pairing" class="tab">Ghép đôi <span id="pending-count" class="count hidden"></span></button>
+  <button data-tab="conflicts" class="tab">Xung đột <span id="conflict-count" class="count hidden"></span></button>
+  <button data-tab="history" class="tab">Lịch sử phiên bản</button>
+</nav>
+
+<main>
+<!-- ============================ TỔNG QUAN ============================ -->
+<section id="tab-overview" class="panel active">
+  <div class="stat-grid" id="stat-grid">
+    <div class="card stat"><div class="stat-label">Trạng thái</div><div class="stat-value" id="stat-state">…</div></div>
+    <div class="card stat"><div class="stat-label">Số file đang đồng bộ</div><div class="stat-value" id="stat-files">…</div></div>
+    <div class="card stat"><div class="stat-label">Đã gửi</div><div class="stat-value" id="stat-sent">…</div></div>
+    <div class="card stat"><div class="stat-label">Đã nhận</div><div class="stat-value" id="stat-recv">…</div></div>
+    <div class="card stat"><div class="stat-label">Tốc độ hiện tại</div><div class="stat-value" id="stat-rate">…</div></div>
+  </div>
+
+  <div id="skip-warning" class="alert alert-warn hidden"></div>
+  <div id="queue-box"></div>
+
+  <div class="grid-2">
+    <div class="card">
+      <h2>Thiết bị này</h2>
+      <div id="overview-body">Đang tải trạng thái…</div>
+    </div>
+    <div class="card">
+      <h2>Điều khiển đồng bộ</h2>
+      <p class="hint">Tạm dừng chỉ dừng việc đồng bộ — trang quản lý này vẫn hoạt động bình thường.</p>
+      <div class="row">
+        <button id="btn-pause" class="btn btn-warn">⏸ Tạm dừng đồng bộ</button>
+        <button id="btn-resume" class="btn btn-primary">▶ Tiếp tục đồng bộ</button>
+      </div>
+      <div id="recent-errors"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ MÁY ĐÃ GHÉP ĐÔI ============================ -->
+<section id="tab-peers" class="panel">
+  <div id="peers-body">Đang tải…</div>
+</section>
+
+<!-- ============================ GHÉP ĐÔI ============================ -->
+<section id="tab-pairing" class="panel">
+  <div class="grid-2">
+    <div class="card">
+      <h2>Cho máy khác ghép với máy này</h2>
+      <p class="hint">Tạo mã 6 số rồi đọc mã cho người ở máy kia nhập vào. Mã có hiệu lực 5 phút; tạo mã mới sẽ thay thế hoàn toàn mã cũ.</p>
+      <div class="row">
+        <button id="btn-code" class="btn btn-primary">Tạo mã ghép đôi</button>
+      </div>
+      <div id="code-display" class="code-box hidden">
+        <div class="bigcode" id="code-value"></div>
+        <div class="hint" id="code-expiry"></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Ghép với một máy khác</h2>
+      <p class="hint">Nhập địa chỉ của máy kia (xem ở trang quản lý của máy đó, mục “Địa chỉ lắng nghe”) và mã 6 số máy kia vừa tạo.</p>
+      <div class="form-row">
+        <label>Địa chỉ máy kia
+          <input id="dial-addr" type="text" placeholder="ví dụ 192.168.1.20:22000">
+        </label>
+        <label>Mã 6 số
+          <input id="dial-code" type="text" inputmode="numeric" placeholder="123456" maxlength="7">
+        </label>
+      </div>
+      <div class="row">
+        <button id="btn-dial" class="btn btn-primary">Ghép đôi</button>
+        <span id="dial-msg"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Yêu cầu ghép đôi đang chờ duyệt</h2>
+    <div id="pending-body">Không có yêu cầu nào.</div>
+    <p class="hint">Ghép đôi chỉ hoàn tất khi <strong>cả hai máy đều duyệt</strong>.
+    Chỉ bấm Duyệt khi fingerprint bên dưới khớp đúng từng nhóm ký tự với fingerprint mà máy kia tự hiển thị trên màn hình của nó — bước này chống ghép nhầm máy và nghe lén, không thể bỏ qua.</p>
+  </div>
+</section>
+
+<!-- ============================ XUNG ĐỘT ============================ -->
+<section id="tab-conflicts" class="panel">
+  <div id="conflicts-body">Đang tải…</div>
+</section>
+
+<!-- ============================ LỊCH SỬ ============================ -->
+<section id="tab-history" class="panel">
+  <div class="card">
+    <h2>Phiên bản đã lưu của một file</h2>
+    <p class="hint">Chọn hoặc gõ đường dẫn file để xem các phiên bản cũ đã được lưu. Khôi phục một phiên bản sẽ lưu nội dung hiện tại vào lịch sử trước, nên khôi phục luôn hoàn tác được.</p>
+    <div class="row">
+      <input id="history-path" type="text" placeholder="ví dụ report.txt" list="files-list" size="42">
+      <datalist id="files-list"></datalist>
+      <button id="btn-history" class="btn btn-primary">Xem lịch sử</button>
+    </div>
+    <div id="history-body"></div>
+  </div>
+</section>
+</main>
+
+<footer class="app-footer">FileSync chỉ nghe trên máy này (127.0.0.1) — trang này không truy cập được từ máy khác.</footer>
+<div id="toasts" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>

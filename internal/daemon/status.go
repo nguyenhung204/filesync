@@ -13,13 +13,17 @@ import (
 // Status is the daemon's public snapshot. The JSON field names are
 // a contract with the CLI and the smoke test — do not rename.
 type Status struct {
-	Version       int              `json:"version"`
-	State         string           `json:"state"` // "running" | "paused" | "stopped"
-	PID           int              `json:"pid"`
-	DeviceID      string           `json:"device_id"`
-	DeviceName    string           `json:"device_name"`
-	Fingerprint   string           `json:"fingerprint"`
-	ListenAddr    string           `json:"listen_addr"`
+	Version     int    `json:"version"`
+	State       string `json:"state"` // "running" | "paused" | "stopped"
+	PID         int    `json:"pid"`
+	DeviceID    string `json:"device_id"`
+	DeviceName  string `json:"device_name"`
+	Fingerprint string `json:"fingerprint"`
+	ListenAddr  string `json:"listen_addr"`
+	// UIAddr is the web UI's loopback address (job 006 D10,
+	// additive, Version stays 1); empty when the UI is disabled
+	// or failed to bind.
+	UIAddr        string           `json:"ui_addr,omitempty"`
 	SyncDir       string           `json:"sync_dir"`
 	ConfigDir     string           `json:"config_dir"`
 	StartedAt     int64            `json:"started_at"` // UnixNano
@@ -67,6 +71,7 @@ func (d *Daemon) Status() Status {
 		SyncDir:       d.cfg.SyncDir,
 		ConfigDir:     d.cfg.ConfigDir,
 		ListenAddr:    d.listenAddr,
+		UIAddr:        d.uiAddr,
 		StartedAt:     d.startedAtUnix,
 		UpdatedAt:     time.Now().UnixNano(),
 		Paused:        d.pausedCached,
