@@ -1,0 +1,7 @@
+PLACEHOLDER - this is NOT a real filesync.exe binary.
+
+This text file only exists so that `go build ./...` compiles on every
+platform (cmd/filesync-setup embeds it via //go:embed). The release
+packaging script (scripts/build-release.sh) temporarily replaces it
+with the real Windows daemon binary, asserts the MZ header and size,
+builds FileSync-Setup.exe, and then restores this placeholder.
