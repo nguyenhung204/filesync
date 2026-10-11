@@ -13,3 +13,5 @@
 - [ ] RequireSpace là check point-in-time — in-flight budget thuộc job 003/004 (cộng dồn transfer đang chạy).
 - [ ] Rescan mặc định code = 30s vs prompt gốc 60s — đồng bộ tài liệu ở job 004.
 - [ ] Job 004: khoá chống 2 daemon cùng mở 1 store (single-instance lock).
+- [ ] README giới hạn đã biết (job 004): mDNS thật trên LAN chưa test được trong môi trường dev (test env-gated FILESYNC_TEST_MDNS=1); restart daemon giữa lúc pairing làm mất cửa mã (codeKey chỉ trong RAM — fail-safe có chủ đích).
+- [ ] Job 004: daemon dùng transport.DefaultOptions() (không tự đặt MDNS=false bằng bool zero).
