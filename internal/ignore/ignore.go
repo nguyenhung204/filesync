@@ -112,6 +112,15 @@ func parseLine(line string) (pattern, bool, error) {
 	}
 	p.segments = strings.Split(line, "/")
 	for _, seg := range p.segments {
+		if seg == "" {
+			// Leading/trailing slashes were already consumed above as
+			// anchoring/dir-only syntax, so an empty segment here means
+			// a doubled slash (a//b, //x) — a malformed pattern, not a
+			// pattern that silently never matches.
+			return p, false, fmt.Errorf("pattern %q contains an empty segment", line)
+		}
+	}
+	for _, seg := range p.segments {
 		if seg == "**" {
 			continue
 		}
