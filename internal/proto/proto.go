@@ -21,7 +21,7 @@ import (
 
 // ProtocolVersion is the only wire protocol version this build speaks.
 // Changing frame semantics requires bumping it.
-const ProtocolVersion = 1
+const ProtocolVersion = 2
 
 // Size limits. A peer-supplied length never controls allocation beyond
 // these bounds (threat 3 in docs/threats.md).
@@ -117,11 +117,12 @@ type Header struct {
 	// index
 	More bool `json:"more,omitempty"` // more Index batches follow
 	// chunk
-	Path    string `json:"path,omitempty"`    // chunk_request, chunk_data
-	Indexes []int  `json:"indexes,omitempty"` // chunk_request (≤ MaxChunkIndexes, ≥ 0, unique)
-	Index   int    `json:"index,omitempty"`   // chunk_data (≥ 0)
-	Size    int    `json:"size,omitempty"`    // chunk_data (== len(payload))
-	SHA256  string `json:"sha256,omitempty"`  // chunk_data (lowercase hex, 64 chars)
+	Path     string `json:"path,omitempty"`     // chunk_request, chunk_data
+	Indexes  []int  `json:"indexes,omitempty"`  // chunk_request (≤ MaxChunkIndexes, ≥ 0, unique)
+	Index    int    `json:"index,omitempty"`    // chunk_data (≥ 0)
+	Size     int    `json:"size,omitempty"`     // chunk_data (raw size; == len(payload) when Encoding is "")
+	SHA256   string `json:"sha256,omitempty"`   // chunk_data (lowercase hex, 64 chars, of the raw chunk)
+	Encoding string `json:"encoding,omitempty"` // chunk_data only: "" (raw) | "gzip"
 	// pairing
 	SessionID string `json:"session_id,omitempty"` // all Pair* except pair_request
 	Nonce     string `json:"nonce,omitempty"`      // pair_challenge, pair_proof (base64, 32 bytes)
@@ -165,6 +166,10 @@ func (m Message) Validate() error {
 	if len(m.Payload) > 0 && h.Type != TypeIndex && h.Type != TypeChunkData {
 		return badf("type %s must not carry a payload", h.Type)
 	}
+	// Encoding discipline: only chunk_data may declare one.
+	if h.Encoding != "" && h.Type != TypeChunkData {
+		return badf("type %s must not carry an encoding", h.Type)
+	}
 	// Pairing fields shared by all Pair* types. PairReject is exempt
 	// from the session_id requirement: rejections also occur before a
 	// session exists (unknown/expired code at the PairRequest step,
@@ -185,7 +190,7 @@ func (m Message) Validate() error {
 	case TypeHello:
 		// Protocol value is deliberately NOT checked here: the
 		// transport layer owns the version handshake (spec Flow F)
-		// and must be able to read a Hello{protocol: 2} in order to
+		// and must be able to read a Hello{protocol: 99} in order to
 		// answer it with Error{protocol_version}.
 		if _, err := identity.ParseDeviceID(h.DeviceID); err != nil {
 			return badf("hello: bad device_id: %v", err)
@@ -218,8 +223,22 @@ func (m Message) Validate() error {
 		if h.Index < 0 {
 			return badf("chunk_data: negative index %d", h.Index)
 		}
-		if h.Size != len(m.Payload) {
-			return badf("chunk_data: size %d != payload %d bytes", h.Size, len(m.Payload))
+		// Size always describes the RAW chunk. For raw payloads it
+		// must equal the payload length; for gzip payloads the
+		// compressed length is bounded by MaxGzipPayloadBytes
+		// instead (the raw length is re-checked after decompression
+		// in DecompressChunkPayload).
+		switch h.Encoding {
+		case "":
+			if h.Size != len(m.Payload) {
+				return badf("chunk_data: size %d != payload %d bytes", h.Size, len(m.Payload))
+			}
+		case EncodingGzip:
+			if len(m.Payload) < 1 || len(m.Payload) > MaxGzipPayloadBytes {
+				return badf("chunk_data: gzip payload %d bytes out of range 1..%d", len(m.Payload), MaxGzipPayloadBytes)
+			}
+		default:
+			return badf("chunk_data: unknown encoding %q", h.Encoding)
 		}
 		if h.Size < 1 || h.Size > chunk.ChunkSize {
 			return badf("chunk_data: size %d out of range 1..%d", h.Size, chunk.ChunkSize)
