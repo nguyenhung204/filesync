@@ -72,6 +72,10 @@ parsed:
 		return cmdStatus(e, cmdArgs)
 	case "ui":
 		return cmdUI(e, cmdArgs)
+	case "uninstall-service":
+		// Hidden helper invoked by the Windows Add/Remove
+		// Programs entry (UninstallString); not listed in usage.
+		return cmdUninstallService(e, cmdArgs)
 	case "pause":
 		return cmdPause(e, cmdArgs, true)
 	case "resume":
