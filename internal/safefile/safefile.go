@@ -39,32 +39,6 @@ var (
 	ErrNotStable = errors.New("safefile: file not stable")
 )
 
-// Resolve joins a validated slash-separated relative path onto root and
-// re-checks the result stays inside root (defense in depth on top of
-// validate.ValidateRelPath). It returns the OS path.
-func Resolve(root, rel string, maxLen int) (string, error) {
-	clean, err := validate.ValidateRelPath(rel, maxLen)
-	if err != nil {
-		return "", fmt.Errorf("safefile: resolve %q: %w", rel, err)
-	}
-	if clean == "." {
-		return root, nil
-	}
-	abs := filepath.Join(root, filepath.FromSlash(clean))
-	rootAbs, err := filepath.Abs(root)
-	if err != nil {
-		return "", fmt.Errorf("safefile: resolve root: %w", err)
-	}
-	absClean, err := filepath.Abs(abs)
-	if err != nil {
-		return "", fmt.Errorf("safefile: resolve %q: %w", rel, err)
-	}
-	if absClean != rootAbs && !strings.HasPrefix(absClean, rootAbs+string(filepath.Separator)) {
-		return "", fmt.Errorf("safefile: resolve %q: path escapes root", rel)
-	}
-	return abs, nil
-}
-
 // IsLockedErr classifies OS errors that mean "another process holds the
 // file": EBUSY / ETXTBSY on Unix, sharing violations surfaced as EACCES or
 // EPERM on some platforms while a writer is active.
@@ -136,6 +110,12 @@ func writeAtomic(root, rel string, r io.Reader, mode os.FileMode, maxLen int) er
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("safefile: close temp: %w", err)
 	}
+	// Re-verify containment immediately before the rename: the parent
+	// directory was checked by Resolve, but it could have been swapped
+	// for an escaping symlink while the temp file was being written.
+	if err := checkContained(root, dir); err != nil {
+		return err
+	}
 	if err := os.Rename(tmpName, dst); err != nil {
 		return wrapLocked("rename temp", err)
 	}
@@ -200,25 +180,37 @@ func CheckStableWith(path string, st Stability) (bool, error) {
 	}
 	size1, mtime1, err := stat(path)
 	if err != nil {
-		if IsLockedErr(err) {
-			return false, fmt.Errorf("safefile: check stable %q: %w (%v)", path, ErrLocked, err)
-		}
-		return false, fmt.Errorf("safefile: check stable %q: %w", path, err)
+		return false, wrapStatErr(path, err)
 	}
 	if st.Interval > 0 {
 		sleep(st.Interval)
 	}
 	size2, mtime2, err := stat(path)
 	if err != nil {
-		return false, fmt.Errorf("safefile: check stable %q: %w", path, err)
+		return false, wrapStatErr(path, err)
 	}
 	return size1 == size2 && mtime1 == mtime2, nil
+}
+
+// wrapStatErr classifies a stability-check stat failure: locked-class
+// errors wrap ErrLocked so callers defer + retry, from EITHER stat.
+func wrapStatErr(path string, err error) error {
+	if IsLockedErr(err) {
+		return fmt.Errorf("safefile: check stable %q: %w (%v)", path, ErrLocked, err)
+	}
+	return fmt.Errorf("safefile: check stable %q: %w", path, err)
 }
 
 // RequireSpace returns an error wrapping ErrDiskFull when the filesystem
 // hosting path has fewer than size free bytes available. Callers check
 // before receiving a file so a full disk stops that one file and leaves
 // its previous state untouched. size <= 0 always passes.
+//
+// Limitation: this is a point-in-time check, not a reservation — it does
+// not account for other transfers in flight or other processes consuming
+// the disk afterwards. The sync engine (job 003) must budget concurrent
+// receives against one shared free-space figure (or re-check per file)
+// rather than letting every transfer pass this check independently.
 func RequireSpace(path string, size int64) error {
 	if size <= 0 {
 		return nil
