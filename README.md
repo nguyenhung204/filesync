@@ -143,7 +143,8 @@ checks.
 
 Other commands: `filesync pause` / `filesync resume` (works with
 the daemon up or down), `filesync conflicts`,
-`filesync conflicts resolve …` (below), `filesync version`.
+`filesync conflicts resolve …` (below), `filesync history <path>`
+and `filesync restore <path>` (below), `filesync version`.
 Most read commands accept `--json`; every command accepts
 `--config-dir <dir>` (default: the per-user config dir).
 
@@ -170,9 +171,17 @@ filesync conflicts resolve report.txt --keep theirs   # keep the copy
 Whichever you discard is **not deleted**: it goes to
 `.filesync/trash` (deletions) and `.filesync/versions` (previous
 versions, 5 per file by default), inside the sync dir. Restore a
-trashed file by moving it back, or browse `.filesync/versions`
-and copy the version you want — FileSync will pick it up as a
-normal edit.
+trashed file by moving it back. For archived versions, use:
+
+```sh
+filesync history report.txt                    # list versions, newest first
+filesync restore report.txt                    # restore the newest version
+filesync restore report.txt --version <name>   # restore a specific version
+```
+
+Restoring archives the current content first, so a restore is
+itself undoable (restore again to go back) — and the restored
+file is picked up as a normal edit and synced to your peers.
 
 ## Configuration
 
@@ -244,6 +253,13 @@ listen address.
 - Repeated conflict generations on the same name get `-2`, `-3`
   suffixes (D3). `.syncignore` is per-machine policy and is never
   synced itself.
+- **Receiving is fsync-bound on slow disks**: the pull path
+  spends ~7 fsyncs per received file (transfer journal,
+  fingerprint key, finalize, atomic write). On storage with slow
+  fsync, the first convergence of a large tree is limited by the
+  disk's fsync latency, not by CPU or network. Batching these
+  into one combined "complete transfer" store operation is a
+  phase-2 optimization.
 - **Post-TTL resurrection is accepted behavior**: tombstones are
   purged after 30 days on every node; a node returning after
   that with a stale live entry will re-share it as new. If you
