@@ -52,7 +52,14 @@ type session struct {
 	snap       map[string]store.Entry
 	snapSorted []store.Entry
 
-	serveWG   sync.WaitGroup
+	// In-flight serve tracking. A WaitGroup would be misused
+	// here: dispatch may Add while RunSession Waits during the
+	// drain window (a request arriving just after the ack swap).
+	// A mutex+counter+channel has no such constraint.
+	serveMu    sync.Mutex
+	serveCount int
+	serveZero  chan struct{} // closed while serveCount == 0
+
 	indexDone chan struct{}
 	indexOnce sync.Once
 	peerAcked chan struct{}
@@ -70,6 +77,8 @@ func newSession(e *Engine, conn SessionConn, ctx context.Context, snapshot []sto
 		peerAcked: make(chan struct{}),
 		snap:      make(map[string]store.Entry, len(snapshot)),
 	}
+	s.serveZero = make(chan struct{})
+	close(s.serveZero) // count starts at 0 = drained
 	s.snapSorted = append(s.snapSorted, snapshot...)
 	sort.Slice(s.snapSorted, func(i, j int) bool { return s.snapSorted[i].Path < s.snapSorted[j].Path })
 	for _, en := range snapshot {
@@ -86,6 +95,32 @@ func (s *session) snapshotEntry(path string) (store.Entry, bool) {
 }
 
 func (s *session) peerID() string { return s.conn.PeerID() }
+
+func (s *session) serveBegin() {
+	s.serveMu.Lock()
+	if s.serveCount == 0 {
+		s.serveZero = make(chan struct{})
+	}
+	s.serveCount++
+	s.serveMu.Unlock()
+}
+
+func (s *session) serveEnd() {
+	s.serveMu.Lock()
+	s.serveCount--
+	if s.serveCount == 0 {
+		close(s.serveZero)
+	}
+	s.serveMu.Unlock()
+}
+
+// serveDrained returns a channel closed once no serves are in
+// flight.
+func (s *session) serveDrained() <-chan struct{} {
+	s.serveMu.Lock()
+	defer s.serveMu.Unlock()
+	return s.serveZero
+}
 
 // RunSession runs ONE sync round on conn (Flow 1): exchange indexes,
 // plan from version vectors, execute the plan (pulls run while the
@@ -155,11 +190,7 @@ func (e *Engine) RunSession(ctx context.Context, conn SessionConn) error {
 	// The round is complete when the peer acked too (its plan —
 	// including its pulls from us — is done) and every chunk request
 	// it sent us has been served.
-	served := make(chan struct{})
-	go func() {
-		s.serveWG.Wait()
-		close(served)
-	}()
+	served := s.serveDrained()
 	select {
 	case <-s.peerAcked:
 	case <-sctx.Done():
@@ -200,9 +231,9 @@ func (s *session) dispatch(m proto.Message) {
 	{
 		switch m.Header.Type {
 		case proto.TypeIndexRequest:
-			s.serveWG.Add(1)
+			s.serveBegin()
 			go func() {
-				defer s.serveWG.Done()
+				defer s.serveEnd()
 				s.e.sendIndex(s, s.ctx)
 			}()
 		case proto.TypeIndex:
@@ -214,9 +245,9 @@ func (s *session) dispatch(m proto.Message) {
 				s.indexOnce.Do(func() { close(s.indexDone) })
 			}
 		case proto.TypeChunkRequest:
-			s.serveWG.Add(1)
+			s.serveBegin()
 			go func() {
-				defer s.serveWG.Done()
+				defer s.serveEnd()
 				s.e.serveChunkRequest(s, s.ctx, m)
 			}()
 		case proto.TypeChunkData:
