@@ -278,15 +278,25 @@ func chunkListKey(chunks []chunk.ChunkMeta) string {
 	return sb.String()
 }
 
-// isMetaTreePath reports whether p is, or lives under, FileSync's
-// own metadata directory at the sync root (.filesync). The local
-// scanner prunes that tree, so a local entry can never carry such
-// a path; a REMOTE entry with one is a peer trying to write into
-// our version history / trash / staging area and is rejected as
-// bad_remote_path at every layer that consumes remote paths
-// (session filter, planner, pull executor).
+// isMetaTreePath reports whether p is, or lives anywhere under,
+// a directory named like FileSync's own metadata directory
+// (.filesync). The local scanner prunes such a directory at ANY
+// depth and the watcher ignores events under one, so a local
+// entry can never carry such a path; a REMOTE entry with one is
+// a peer trying to write into our version history / trash /
+// staging area (or plant dark matter no local scan would ever
+// see again) and is rejected as bad_remote_path at every layer
+// that consumes remote paths (session filter, planner, pull
+// executor). Every segment is compared case-insensitively:
+// Windows and macOS filesystems are case-insensitive by
+// default, so ".Filesync" there IS the real metadata tree.
 func isMetaTreePath(p string) bool {
-	return p == history.MetaDir || strings.HasPrefix(p, history.MetaDir+"/")
+	for _, seg := range strings.Split(p, "/") {
+		if strings.EqualFold(seg, history.MetaDir) {
+			return true
+		}
+	}
+	return false
 }
 
 func chunksEqual(a, b []chunk.ChunkMeta) bool {

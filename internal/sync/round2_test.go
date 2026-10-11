@@ -91,6 +91,70 @@ func TestSessionMetaTreeEntriesRejected(t *testing.T) {
 	}
 }
 
+// TestSessionMetaTreeCaseAndDepthVariantsRejected extends the
+// round-2 regression test with the round-2 security review's
+// bypasses: the first version of isMetaTreePath matched only the
+// first segment, exact case — so ".Filesync/planted.txt" and
+// ".FILESYNC/trash/fake.txt" sailed through all three layers.
+// On Linux they only grow a harmless shadow tree, but on the
+// case-insensitive filesystems Windows and macOS ship by
+// default those names ARE the real metadata tree, reopening the
+// version-forgery BLOCKER there. A ".filesync" segment in the
+// middle of a path ("sub/.filesync/nested.txt") was accepted
+// too, although the scanner prunes that name at any depth and
+// the watcher treats any such segment as meta — the file would
+// have become dark matter in the index. After the fix every
+// variant must be rejected exactly like the round-2 paths: no
+// file on disk, no entry in the store, bad_remote_path
+// recorded, and the honest entry in the same batch still syncs.
+func TestSessionMetaTreeCaseAndDepthVariantsRejected(t *testing.T) {
+	n := newTestNode(t)
+	good := []byte("fine")
+	goodMetas := metasOf(good)
+	pwn := []byte("PWNED")
+	pwnMetas := metasOf(pwn)
+	metaPaths := []string{
+		".Filesync/planted.txt",
+		".FILESYNC/trash/fake.txt",
+		".Filesync/versions/notes.txt/v9-fake",
+		"sub/.filesync/nested.txt",
+		"sub/.Filesync/nested2.txt",
+	}
+	entries := []store.Entry{
+		remoteEntry("good.txt", goodMetas, int64(len(good))),
+	}
+	contents := map[string][]byte{"good.txt": good}
+	for _, p := range metaPaths {
+		entries = append(entries, remoteEntry(p, pwnMetas, int64(len(pwn))))
+		contents[p] = pwn
+	}
+	p := newScriptPeer(entries, contents)
+	runScriptedRound(t, n, p)
+
+	if data := readFile(t, n.root, "good.txt"); !bytes.Equal(data, good) {
+		t.Fatal("honest entry in the same index as meta-tree variants was not pulled")
+	}
+	for _, mp := range metaPaths {
+		if _, err := os.Stat(filepath.Join(n.root, filepath.FromSlash(mp))); !os.IsNotExist(err) {
+			t.Fatalf("peer planted a file via meta-tree variant: %s", mp)
+		}
+		if _, found, err := n.st.GetEntry(mp); err != nil || found {
+			t.Fatalf("meta-tree variant entered the local index: %s (found=%v err=%v)", mp, found, err)
+		}
+	}
+	recorded := map[string]bool{}
+	for _, se := range n.eng.LastErrors() {
+		if se.Code == "bad_remote_path" {
+			recorded[se.Path] = true
+		}
+	}
+	for _, mp := range metaPaths {
+		if !recorded[mp] {
+			t.Fatalf("no bad_remote_path recorded for %s: %+v", mp, n.eng.LastErrors())
+		}
+	}
+}
+
 // floodPeer streams valid index batches with More=true forever
 // until the connection dies. It models the round-1 IMPORTANT 2
 // attacker: every per-message limit passes; only an accumulated
