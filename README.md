@@ -81,7 +81,16 @@ systemctl --user enable --now filesync
 
 ### Windows (service via sc.exe)
 
-From an **elevated** PowerShell:
+**One-click (recommended):** download a release (or build `filesync.exe`),
+put `filesync.exe` together with `install-service.ps1`,
+`uninstall-service.ps1`, `cai-dat-filesync.bat` and
+`go-cai-dat-filesync.bat` (all in `deploy/windows/`) in one folder, then
+double-click `cai-dat-filesync.bat`. It copies the binary, runs `init`,
+asks for admin rights to register the service, and only reports success
+after the service has been verified RUNNING. To remove the service later,
+double-click `go-cai-dat-filesync.bat` (config and synced data are kept).
+
+Manual alternative, from an **elevated** PowerShell:
 
 ```powershell
 mkdir "$env:LOCALAPPDATA\Programs\filesync" -Force
@@ -89,6 +98,9 @@ copy filesync.exe "$env:LOCALAPPDATA\Programs\filesync\"
 .\deploy\windows\install-service.ps1
 # remove later with: .\deploy\windows\uninstall-service.ps1
 ```
+
+All Windows scripts are plain ASCII and compatible with Windows
+PowerShell 5.1+.
 
 ### macOS (launchd)
 
