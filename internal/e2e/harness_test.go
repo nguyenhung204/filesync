@@ -119,10 +119,35 @@ func freeAddr(t *testing.T) string {
 	return ln.Addr().String()
 }
 
+// testBase allocates a node dir on the big disk: /tmp is a small
+// tmpfs on this machine (512 MiB) and the resume test moves 1 GiB
+// files around, so t.TempDir() is not an option there.
+func testBase(t *testing.T) string {
+	t.Helper()
+	root := os.Getenv("FILESYNC_E2E_TMP")
+	if root == "" {
+		home, err := os.UserHomeDir()
+		if err == nil && home != "" {
+			root = filepath.Join(home, ".filesync-e2e-tmp")
+		} else {
+			root = os.TempDir()
+		}
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	base, err := os.MkdirTemp(root, "node-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(base) })
+	return base
+}
+
 // newNode prepares a node's dirs and config and runs `init`.
 func newNode(t *testing.T, name string) *node {
 	t.Helper()
-	base := t.TempDir()
+	base := testBase(t)
 	n := &node{
 		t:       t,
 		name:    name,
@@ -186,7 +211,7 @@ func (n *node) start() {
 	n.cmd = cmd
 	st := n.waitStatus(func(s daemon.Status) bool {
 		return (s.State == "running" || s.State == "paused") && s.ListenAddr != ""
-	}, 20*time.Second)
+	}, 60*time.Second)
 	if st.DeviceID != n.deviceID {
 		n.t.Fatalf("node %s: status device %q != init device %q", n.name, st.DeviceID, n.deviceID)
 	}

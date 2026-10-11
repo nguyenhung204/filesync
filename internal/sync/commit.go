@@ -17,7 +17,7 @@ import (
 // vector (the file was re-created after a delete), renames carry the
 // old path's vector to the new path. The scanner's Skipped paths are
 // never interpreted: an unstable file is not a delete.
-func (e *Engine) CommitScan(res index.ScanResult) (bool, error) {
+func (e *Engine) CommitScan(res index.ScanResult) (changed bool, err error) {
 	self := e.id.DeviceID
 
 	stored, err := e.st.ListEntries()
@@ -37,15 +37,32 @@ func (e *Engine) CommitScan(res index.ScanResult) (bool, error) {
 		skipped[sk.Path] = true
 	}
 
-	changed := false
+	// All writes are collected and flushed as ONE store
+	// transaction at the end (see store.UpsertEntries): a scan can
+	// touch one entry per file in the tree, and one transaction +
+	// one fsync is the difference between 5s and 200s for a
+	// 10k-file tree on a disk with slow fsync. The in-memory map
+	// is updated eagerly so the logic below sees its own writes;
+	// on a flush failure nothing was persisted and the next scan
+	// simply re-detects the same changes.
+	var pending []store.Entry
 	upsert := func(en store.Entry) error {
-		if err := e.st.UpsertEntry(en); err != nil {
-			return fmt.Errorf("sync: commit scan: upsert %q: %w", en.Path, err)
-		}
 		storeByPath[en.Path] = en
+		pending = append(pending, en)
 		changed = true
 		return nil
 	}
+	defer func() {
+		if len(pending) == 0 {
+			return
+		}
+		if berr := e.st.UpsertEntries(pending); berr != nil {
+			if err == nil {
+				err = fmt.Errorf("sync: commit scan: batch upsert: %w", berr)
+			}
+			changed = false
+		}
+	}()
 
 	for _, ch := range res.Changes {
 		switch ch.Kind {
