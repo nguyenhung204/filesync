@@ -1,12 +1,11 @@
 # Backlog dọn dẹp (NIT từ review — không chặn merge)
 
-## GATE từ approver job 001 (decision.md) — bắt buộc trước job 003 build
-- [ ] validate: reject UTF-8 không hợp lệ + thêm reserved names CONIN$/CONOUT$ (cập nhật spec job 001 trước khi thêm).
-- [ ] chunk: Bitmap.UnmarshalBinary chống tràn số (n cực lớn → Len âm) — bắt buộc trước khi bitmap nạp từ nguồn kém tin cậy hơn journal local; tầng sync không kết luận "đủ chunk" chỉ dựa vào Missing() cho tới khi vá.
+## GATE từ approver job 001 — ĐÃ ĐÓNG bởi job 002c (merge 2026-10-11)
+- [x] validate: reject UTF-8 không hợp lệ + reserved names CONIN$/CONOUT$ (spec job 001 đã cập nhật).
+- [x] chunk: Bitmap.UnmarshalBinary chống tràn số.
 
-## NIT thường (job dọn dẹp 002c xử lý luôn nếu tiện)
-- [ ] validate: ValidateSegment NFC-normalize trước check 255 byte; Error.Path giữ path gốc.
-- [ ] vclock: marshal/unmarshal đối xứng với khoá rỗng; config.Load("") validate ở nhánh missing-file; ignore: pattern a//b báo lỗi thay vì lặng lẽ.
+## NIT thường — ĐÃ XONG ở job 002c
+- [x] validate: ValidateSegment NFC + Error.Path gốc; vclock canonical khoá rỗng; config Load validate; ignore reject segment rỗng.
 
 ## Giới hạn đã biết (từ approver job 002 — đưa vào README ở job 004)
 - [ ] Race microsecond check→rename/hash còn lại (cần API no-follow theo descriptor mới đóng triệt để) — job 003/004 không coi là đã đóng hẳn.
