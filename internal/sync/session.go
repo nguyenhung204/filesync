@@ -31,6 +31,10 @@ type SessionConn interface {
 // cut by the engine.
 const indexWaitTimeout = 60 * time.Second
 
+// serveDrainGrace bounds the best-effort wait for in-flight chunk
+// serves after both acks have been exchanged.
+const serveDrainGrace = 2 * time.Second
+
 var errPathFailed = errors.New("sync: peer reported an error for path")
 
 type session struct {
@@ -134,10 +138,14 @@ func (e *Engine) RunSession(ctx context.Context, conn SessionConn) error {
 	case <-sctx.Done():
 		return fmt.Errorf("sync: session %s: %w", conn.PeerID(), sctx.Err())
 	}
+	// Both acks are exchanged: the round is complete (Flow 1 step
+	// 6). Draining in-flight serves is best-effort from here — the
+	// peer is allowed to close the connection the moment its own
+	// round ends, and that must not retroactively fail ours.
 	select {
 	case <-served:
 	case <-sctx.Done():
-		return fmt.Errorf("sync: session %s: %w", conn.PeerID(), sctx.Err())
+	case <-time.After(serveDrainGrace):
 	}
 	e.noteRoundDone()
 	return nil

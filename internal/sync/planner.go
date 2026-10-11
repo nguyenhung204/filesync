@@ -123,6 +123,14 @@ func plan(local, remote []store.Entry, maxLen int) []Action {
 				Kind: ActionApplyRename, Path: r.Path, FromPath: p1,
 				Local: l, HasLocal: true, Remote: r,
 			})
+			// The old path's tombstone (the delete half of the
+			// rename) is adopted in the same round, so both stores
+			// converge immediately instead of a round later.
+			if re, ok := remoteByPath[p1]; ok && re.Tombstone {
+				actions = append(actions, Action{
+					Kind: ActionAdoptTombstone, Path: p1, Remote: re,
+				})
+			}
 			handledLocal[p1] = true
 			handledRemote[r.Path] = true
 			handledLocal[r.Path] = true

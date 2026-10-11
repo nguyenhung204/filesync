@@ -85,20 +85,43 @@ func (e *Engine) CommitScan(res index.ScanResult) (bool, error) {
 				}
 				continue
 			}
+			// A rename is delete+create with linked vectors: the
+			// new path's entry AND a tombstone for the old path
+			// both carry old.Vector.Increment(self). The tombstone
+			// is load-bearing, not bookkeeping: without it the
+			// renaming node itself would pull the old path back
+			// from any peer that has not seen the rename yet (the
+			// peer's live entry would look like a new file), and
+			// the planner's rename rule explicitly contemplates a
+			// dominated/equal tombstone at the old path. (This
+			// refines Flow 0's literal "DeleteEntry(OldPath)":
+			// delete+create semantics are preserved, the delete is
+			// just recorded the way every other delete is.)
+			vec := old.Vector.Clone().Increment(self)
+			ts := store.Entry{
+				Path:        ch.OldPath,
+				Size:        0,
+				MtimeNs:     0,
+				Mode:        0,
+				Chunks:      nil,
+				Vector:      vec.Clone(),
+				Tombstone:   true,
+				TombstoneTs: e.now().UnixNano(),
+				UpdatedBy:   self,
+			}
+			if err := upsert(ts); err != nil {
+				return changed, err
+			}
 			ne := old
 			ne.Path = ch.Path
 			ne.Size = se.Size
 			ne.MtimeNs = se.MtimeNs
 			ne.Mode = se.Mode
 			ne.Chunks = se.Chunks
-			ne.Vector = old.Vector.Clone().Increment(self)
+			ne.Vector = vec
 			ne.UpdatedBy = self
 			ne.Tombstone = false
 			ne.TombstoneTs = 0
-			if err := e.st.DeleteEntry(ch.OldPath); err != nil {
-				return changed, fmt.Errorf("sync: commit scan: delete renamed-away %q: %w", ch.OldPath, err)
-			}
-			delete(storeByPath, ch.OldPath)
 			if err := upsert(ne); err != nil {
 				return changed, err
 			}

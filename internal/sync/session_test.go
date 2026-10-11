@@ -204,7 +204,9 @@ func TestSessionTransportLoopback(t *testing.T) {
 	serve := func(tm *transport.Manager, n *testNode) {
 		go func() {
 			_ = tm.Serve(ctx, func(hctx context.Context, c *transport.Conn) {
-				_ = n.eng.RunSession(hctx, c)
+				if err := n.eng.RunSession(hctx, c); err != nil {
+					t.Logf("session error on %s: %v", n.id.DeviceID, err)
+				}
 			}, nil)
 		}()
 	}

@@ -74,14 +74,18 @@ func TestCommitVectorLifecycle(t *testing.T) {
 	n.scanCommit(t)
 	expectVec("f.txt", 2)
 
-	// Rename carries the vector to the new path.
+	// Rename carries the vector to the new path, and leaves a
+	// tombstone with the same incremented vector at the old path
+	// (the delete half of the rename — without it, peers that have
+	// not seen the rename yet would make us pull the old file back).
 	if err := os.Rename(n.root+"/f.txt", n.root+"/g.txt"); err != nil {
 		t.Fatal(err)
 	}
 	n.scanCommit(t)
 	expectVec("g.txt", 3)
-	if _, found := vecOf("f.txt"); found {
-		t.Fatal("old path entry survived rename")
+	old := expectVec("f.txt", 3)
+	if !old.Tombstone {
+		t.Fatal("old path has no tombstone after rename")
 	}
 
 	// Delete becomes a tombstone continuing the vector.

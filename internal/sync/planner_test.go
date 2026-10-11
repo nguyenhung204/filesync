@@ -130,7 +130,7 @@ func TestPlannerTable(t *testing.T) {
 			[]store.Entry{live("old.txt", base, "A", cA...)},
 			[]store.Entry{live("new.txt", vv(map[string]uint64{"A": 1, "B": 1}), "B", cA...),
 				tomb("old.txt", vv(map[string]uint64{"A": 1, "B": 1}), "B", 9)},
-			[]string{"apply_rename new.txt"}},
+			[]string{"adopt_tombstone old.txt", "apply_rename new.txt"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -203,11 +203,20 @@ func TestPlannerRenameNoTransfer(t *testing.T) {
 	r := live("docs/b.txt", vv(map[string]uint64{"A": 1, "B": 1}), "B", meta(3, 42))
 	rt := tomb("docs/a.txt", vv(map[string]uint64{"A": 1, "B": 1}), "B", 7)
 	acts := Plan([]store.Entry{l}, []store.Entry{r, rt}, "A")
-	if len(acts) != 1 || acts[0].Kind != ActionApplyRename {
-		t.Fatalf("actions = %+v, want apply_rename only", acts)
+	var rename *Action
+	for i := range acts {
+		if acts[i].Kind == ActionPull {
+			t.Fatalf("rename planned a pull (would transfer bytes): %+v", acts)
+		}
+		if acts[i].Kind == ActionApplyRename {
+			rename = &acts[i]
+		}
 	}
-	if acts[0].FromPath != "docs/a.txt" || acts[0].Path != "docs/b.txt" {
-		t.Fatalf("rename action = %+v", acts[0])
+	if rename == nil {
+		t.Fatalf("actions = %+v, want an apply_rename", acts)
+	}
+	if rename.FromPath != "docs/a.txt" || rename.Path != "docs/b.txt" {
+		t.Fatalf("rename action = %+v", rename)
 	}
 }
 

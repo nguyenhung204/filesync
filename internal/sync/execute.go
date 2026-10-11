@@ -28,7 +28,32 @@ func (e *Engine) executeActions(ctx context.Context, s *session, actions []Actio
 			fn()
 		}()
 	}
+	// Renames run first, inline: a rename's companion
+	// AdoptTombstone for the old path (emitted by the planner in the
+	// same plan) must land AFTER the rename has moved the file and
+	// cleared the old entry, or it would be deleted again by the
+	// rename's own bookkeeping.
+	var rest []Action
+	var renameFallbacks []Action
 	for _, a := range actions {
+		if a.Kind != ActionApplyRename {
+			rest = append(rest, a)
+			continue
+		}
+		if !e.applyRename(s, a) {
+			renameFallbacks = append(renameFallbacks, a)
+		}
+	}
+	for _, a := range renameFallbacks {
+		a := a
+		run(func() {
+			e.executePull(ctx, s, pullTarget{
+				src: a.Remote, destPath: a.Path,
+				destVector: a.Remote.Vector, destUpdatedBy: a.Remote.UpdatedBy,
+			})
+		})
+	}
+	for _, a := range rest {
 		a := a
 		switch a.Kind {
 		case ActionAdoptTombstone:
@@ -56,18 +81,6 @@ func (e *Engine) executeActions(ctx context.Context, s *session, actions []Actio
 			}
 		case ActionApplyDelete:
 			e.applyDelete(s, a)
-		case ActionApplyRename:
-			if !e.applyRename(s, a) {
-				// Rename impossible right now (source raced away):
-				// fall back to a normal pull — correctness first,
-				// the zero-transfer property is an optimization.
-				run(func() {
-					e.executePull(ctx, s, pullTarget{
-						src: a.Remote, destPath: a.Path,
-						destVector: a.Remote.Vector, destUpdatedBy: a.Remote.UpdatedBy,
-					})
-				})
-			}
 		case ActionPull:
 			run(func() {
 				vec := a.Remote.Vector
