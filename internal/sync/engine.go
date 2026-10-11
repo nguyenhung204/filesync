@@ -74,6 +74,12 @@ type Engine struct {
 	pulls    map[string]*PullState
 	errs     []SyncError
 
+	// Large-file archive-skip tracking (job 005, spec D5); guarded
+	// by mu like errs.
+	skippedArchives int64
+	lastSkip        *VersionSkip
+	warnedSkips     map[string]bool
+
 	budgetMu sync.Mutex
 	inflight int64 // bytes still owed to in-flight pulls, all peers (D12)
 
@@ -112,6 +118,7 @@ func NewEngine(cfg config.Config, id *identity.Identity, st *store.Store, hist *
 		parallelism: par,
 		pulls:       make(map[string]*PullState),
 		pumps:       make(map[SessionConn]*connPump),
+		warnedSkips: make(map[string]bool),
 	}
 }
 
@@ -272,7 +279,37 @@ func (e *Engine) budgetRecheck(ownRemaining int64) bool {
 	return free >= others
 }
 
+// archive stores the current live copy of rel in version history
+// before an overwrite. Large-file policy (job 005, spec D1–D4): a
+// live file strictly bigger than the version-history quota is NOT
+// archived — under job 002's protect rule one oversized version
+// would be kept despite the quota (a 20 GiB file × 5 kept versions
+// ≈ 100 GiB of silent disk growth). The skip is recorded via
+// noteVersionSkip and the overwrite proceeds normally; a missing or
+// un-stat-able live file falls through to Archive as before (it
+// returns ("", nil) for absent files). The gate sits BEFORE the
+// archiveFn seam so tests observe it (spec D6). This wrapper is the
+// only archive entry point for the pull, rename and conflict paths;
+// direct history users (trash, restore) are not subject to it.
 func (e *Engine) archive(rel string) (string, error) {
+	if quota := e.cfg.VersionHistoryQuotaBytes; quota > 0 {
+		if _, info, err := safefile.RequireRegularFile(e.cfg.SyncDir, rel, e.cfg.MaxPathLength); err == nil && info.Size() > quota {
+			if e.noteVersionSkip(rel, info.Size()) {
+				e.log.Warn(nil, "sync: version archive skipped for large file",
+					logx.String("path", rel), logx.Int64("size", info.Size()),
+					logx.Int64("quota_bytes", quota))
+			}
+			return "", nil
+		}
+	}
+	name, err := e.archiveReal(rel)
+	if err == nil {
+		e.clearSkipWarn(rel)
+	}
+	return name, err
+}
+
+func (e *Engine) archiveReal(rel string) (string, error) {
 	if e.archiveFn != nil {
 		return e.archiveFn(rel)
 	}

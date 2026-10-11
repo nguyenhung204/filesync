@@ -13,30 +13,34 @@ import (
 // Status is the daemon's public snapshot. The JSON field names are
 // a contract with the CLI and the smoke test — do not rename.
 type Status struct {
-	Version         int                   `json:"version"`
-	State           string                `json:"state"` // "running" | "paused" | "stopped"
-	PID             int                   `json:"pid"`
-	DeviceID        string                `json:"device_id"`
-	DeviceName      string                `json:"device_name"`
-	Fingerprint     string                `json:"fingerprint"`
-	ListenAddr      string                `json:"listen_addr"`
-	SyncDir         string                `json:"sync_dir"`
-	ConfigDir       string                `json:"config_dir"`
-	StartedAt       int64                 `json:"started_at"` // UnixNano
-	UpdatedAt       int64                 `json:"updated_at"` // UnixNano
-	Paused          bool                  `json:"paused"`
-	IndexedFiles    int                   `json:"indexed_files"`
-	InitialScanMs   int64                 `json:"initial_scan_ms"`
-	Peers           []PeerStatus          `json:"peers"`
-	Queue           []sync.PullState      `json:"queue"`
-	BytesSent       int64                 `json:"bytes_sent"`
-	BytesReceived   int64                 `json:"bytes_received"`
-	RateBps         int64                 `json:"rate_bps"`
-	Rounds          int64                 `json:"rounds"`
-	LastError       *sync.SyncError       `json:"last_error,omitempty"`
-	RecentErrors    []sync.SyncError      `json:"recent_errors"`
-	PendingPairs    []pairing.PendingPair `json:"pending_pairs"`
-	ActiveTransfers []string              `json:"active_transfers"`
+	Version       int              `json:"version"`
+	State         string           `json:"state"` // "running" | "paused" | "stopped"
+	PID           int              `json:"pid"`
+	DeviceID      string           `json:"device_id"`
+	DeviceName    string           `json:"device_name"`
+	Fingerprint   string           `json:"fingerprint"`
+	ListenAddr    string           `json:"listen_addr"`
+	SyncDir       string           `json:"sync_dir"`
+	ConfigDir     string           `json:"config_dir"`
+	StartedAt     int64            `json:"started_at"` // UnixNano
+	UpdatedAt     int64            `json:"updated_at"` // UnixNano
+	Paused        bool             `json:"paused"`
+	IndexedFiles  int              `json:"indexed_files"`
+	InitialScanMs int64            `json:"initial_scan_ms"`
+	Peers         []PeerStatus     `json:"peers"`
+	Queue         []sync.PullState `json:"queue"`
+	BytesSent     int64            `json:"bytes_sent"`
+	BytesReceived int64            `json:"bytes_received"`
+	RateBps       int64            `json:"rate_bps"`
+	Rounds        int64            `json:"rounds"`
+	LastError     *sync.SyncError  `json:"last_error,omitempty"`
+	RecentErrors  []sync.SyncError `json:"recent_errors"`
+	// Large-file archive skips (job 005): additive fields, Version
+	// stays 1 — old consumers keep parsing.
+	SkippedVersionArchives int64                 `json:"skipped_version_archives"`
+	LastVersionSkip        *sync.VersionSkip     `json:"last_version_skip,omitempty"`
+	PendingPairs           []pairing.PendingPair `json:"pending_pairs"`
+	ActiveTransfers        []string              `json:"active_transfers"`
 }
 
 type PeerStatus struct {
@@ -84,6 +88,7 @@ func (d *Daemon) Status() Status {
 		st.Rounds = c.Rounds
 		st.Queue = d.eng.ActivePulls()
 		st.RecentErrors = d.eng.LastErrors()
+		st.SkippedVersionArchives, st.LastVersionSkip = d.eng.SkippedArchives()
 	}
 	if st.Queue == nil {
 		st.Queue = []sync.PullState{}

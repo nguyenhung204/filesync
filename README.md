@@ -260,6 +260,17 @@ listen address.
   disk's fsync latency, not by CPU or network. Batching these
   into one combined "complete transfer" store operation is a
   phase-2 optimization.
+- **Large files are not versioned on overwrite**: a file larger
+  than `version_history_quota_bytes` (default 1 GiB) that a peer
+  overwrites via sync does NOT keep its old copy in version
+  history — otherwise one 20 GiB file could pin ~100 GiB of
+  versions (5 kept copies) despite the quota. The file itself
+  syncs normally; the number of skipped archives and the most
+  recent one are visible in `status` (`skipped_version_archives`,
+  `last_version_skip`). To keep old copies of large files, raise
+  `version_history_quota_bytes` in config.json (0 = unlimited)
+  and restart the daemon. Deleting a large file still moves it
+  to trash as usual — this policy only covers overwrites.
 - **Post-TTL resurrection is accepted behavior**: tombstones are
   purged after 30 days on every node; a node returning after
   that with a stale live entry will re-share it as new. If you
