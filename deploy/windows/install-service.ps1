@@ -18,7 +18,7 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 }
 
 if (-not (Test-Path $BinaryPath)) {
-    Write-Error "filesync.exe not found at $BinaryPath — build/copy it first, or pass -BinaryPath."
+    Write-Error "filesync.exe not found at $BinaryPath - build/copy it first, or pass -BinaryPath."
     exit 1
 }
 
@@ -33,6 +33,7 @@ if ($existing) {
     Write-Host "FileSync service already exists; stopping and reconfiguring it."
     Stop-Service -Name FileSync -Force -ErrorAction SilentlyContinue
     sc.exe delete FileSync | Out-Null
+    if ($LASTEXITCODE -ne 0) { Write-Error "sc.exe delete failed ($LASTEXITCODE)"; exit 1 }
     Start-Sleep -Seconds 1
 }
 
@@ -40,8 +41,28 @@ sc.exe create FileSync binPath= $binPath start= auto DisplayName= "FileSync"
 if ($LASTEXITCODE -ne 0) { Write-Error "sc.exe create failed ($LASTEXITCODE)"; exit 1 }
 
 sc.exe failure FileSync reset= 86400 actions= restart/5000 | Out-Null
-sc.exe description FileSync "Two-way file sync without a cloud (LAN, phase 1)" | Out-Null
-sc.exe start FileSync | Out-Null
+if ($LASTEXITCODE -ne 0) { Write-Error "sc.exe failure failed ($LASTEXITCODE)"; exit 1 }
 
-Write-Host "FileSync service installed and started. Config dir: $ConfigDir"
+sc.exe description FileSync "Two-way file sync without a cloud (LAN, phase 1)" | Out-Null
+if ($LASTEXITCODE -ne 0) { Write-Error "sc.exe description failed ($LASTEXITCODE)"; exit 1 }
+
+sc.exe start FileSync | Out-Null
+if ($LASTEXITCODE -ne 0) { Write-Error "sc.exe start failed ($LASTEXITCODE)"; exit 1 }
+
+# Do not claim success until the Service Control Manager reports RUNNING.
+$deadline = (Get-Date).AddSeconds(15)
+$lastStatus = "unknown"
+do {
+    $svc = Get-Service -Name FileSync -ErrorAction SilentlyContinue
+    if ($svc) { $lastStatus = "$($svc.Status)" }
+    if ($lastStatus -eq "Running") { break }
+    Start-Sleep -Milliseconds 500
+} while ((Get-Date) -lt $deadline)
+
+if ($lastStatus -ne "Running") {
+    Write-Error "FileSync service did not reach RUNNING state within 15 seconds (last status: $lastStatus). Run `"$BinaryPath`" serve in a console to see the daemon log."
+    exit 1
+}
+
+Write-Host "FileSync service installed and RUNNING. Config dir: $ConfigDir"
 Write-Host "Check it with: filesync --config-dir `"$ConfigDir`" status"

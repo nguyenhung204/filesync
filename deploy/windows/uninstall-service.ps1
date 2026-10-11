@@ -14,4 +14,20 @@ if (-not $existing) {
 }
 Stop-Service -Name FileSync -Force -ErrorAction SilentlyContinue
 sc.exe delete FileSync | Out-Null
+if ($LASTEXITCODE -ne 0) { Write-Error "sc.exe delete failed ($LASTEXITCODE)"; exit 1 }
+
+# Do not claim removal until the service is really gone.
+$deadline = (Get-Date).AddSeconds(15)
+$remaining = $existing
+do {
+    $remaining = Get-Service -Name FileSync -ErrorAction SilentlyContinue
+    if (-not $remaining) { break }
+    Start-Sleep -Milliseconds 500
+} while ((Get-Date) -lt $deadline)
+
+if ($remaining) {
+    Write-Error "FileSync service still exists 15 seconds after sc.exe delete (status: $($remaining.Status))."
+    exit 1
+}
+
 Write-Host "FileSync service removed. (User data and config were left untouched.)"
