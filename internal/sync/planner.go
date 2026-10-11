@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"filesync/internal/chunk"
+	"filesync/internal/history"
 	"filesync/internal/store"
 	"filesync/internal/validate"
 	"filesync/internal/vclock"
@@ -65,7 +66,10 @@ func plan(local, remote []store.Entry, maxLen int) []Action {
 		// Defense layer 2 (proto validation is layer 1): a remote
 		// entry whose path fails validation is skipped entirely —
 		// the engine records it as bad_remote_path before planning.
-		if _, err := validate.ValidateRelPath(e.Path, maxLen); err != nil {
+		// Entries inside our own metadata tree (.filesync/...) are
+		// rejected here too: a peer must never plant files into
+		// versions/ or trash/ (round-2 security BLOCKER 2).
+		if _, err := validate.ValidateRelPath(e.Path, maxLen); err != nil || isMetaTreePath(e.Path) {
 			continue
 		}
 		remoteByPath[e.Path] = e
@@ -84,7 +88,7 @@ func plan(local, remote []store.Entry, maxLen int) []Action {
 		if r.Tombstone || handledRemote[r.Path] || len(r.Chunks) == 0 {
 			continue
 		}
-		if _, err := validate.ValidateRelPath(r.Path, maxLen); err != nil {
+		if _, err := validate.ValidateRelPath(r.Path, maxLen); err != nil || isMetaTreePath(r.Path) {
 			continue
 		}
 		// A live local entry at the destination blocks the rename:
@@ -272,6 +276,17 @@ func chunkListKey(chunks []chunk.ChunkMeta) string {
 		sb.WriteString(hex.EncodeToString(c.SHA256[:]))
 	}
 	return sb.String()
+}
+
+// isMetaTreePath reports whether p is, or lives under, FileSync's
+// own metadata directory at the sync root (.filesync). The local
+// scanner prunes that tree, so a local entry can never carry such
+// a path; a REMOTE entry with one is a peer trying to write into
+// our version history / trash / staging area and is rejected as
+// bad_remote_path at every layer that consumes remote paths
+// (session filter, planner, pull executor).
+func isMetaTreePath(p string) bool {
+	return p == history.MetaDir || strings.HasPrefix(p, history.MetaDir+"/")
 }
 
 func chunksEqual(a, b []chunk.ChunkMeta) bool {

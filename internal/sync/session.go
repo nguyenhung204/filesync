@@ -31,6 +31,25 @@ type SessionConn interface {
 // cut by the engine.
 const indexWaitTimeout = 60 * time.Second
 
+// Accumulated index caps for ONE round (round-2 security
+// IMPORTANT 2). Proto bounds each index MESSAGE (≤1000 entries,
+// ≤4 MiB payload), but nothing bounded the SUM: a peer streaming
+// More=true batches forever grew the session's remote index
+// without limit (~56 MiB/s measured on loopback — the daemon
+// would be OOM-killed long before the 60 s index timeout). The
+// caps sit far above any legitimate phase-1 tree: 1M entries is
+// 100× the 10k-file workload target, and 256 MiB of payload is
+// ~1M average entries (an entry is ~250 B of JSON for small
+// files; a 1 GiB file costs ~115 KiB for its 1024 chunk hashes,
+// so even a tree of nothing but 1 GiB files fits ~2000 of them,
+// and realistic mixed trees fit vastly more). A round that hits
+// a cap is aborted, the partial index is discarded with the
+// session, and the failure is recorded as message_too_large.
+const (
+	maxIndexEntriesPerRound = 1_000_000
+	maxIndexBytesPerRound   = 256 << 20 // 256 MiB
+)
+
 // serveDrainGrace bounds the best-effort wait for in-flight chunk
 // serves after both acks have been exchanged.
 const serveDrainGrace = 2 * time.Second
@@ -46,6 +65,14 @@ type session struct {
 	waiters map[string]map[int][]chan proto.Message
 	failCh  map[string]chan struct{}
 	remote  []store.Entry
+
+	// Index accumulation accounting for the caps above, plus the
+	// abort plumbing: indexErr is set (under mu) before cancel is
+	// called, so RunSession can name the real failure instead of
+	// a bare context error.
+	indexBytes int64
+	indexErr   error
+	cancel     context.CancelFunc
 
 	// snap is the round-start local index snapshot: the only index
 	// this round sends or serves from (see sendIndex).
@@ -144,6 +171,7 @@ func (e *Engine) RunSession(ctx context.Context, conn SessionConn) error {
 		return fmt.Errorf("sync: session %s: snapshot local index: %w", conn.PeerID(), err)
 	}
 	s := newSession(e, conn, sctx, snapshot)
+	s.cancel = cancel
 	pump := e.pumpFor(conn)
 	inbox := pump.subscribe()
 	defer pump.unsubscribe(inbox)
@@ -161,6 +189,12 @@ func (e *Engine) RunSession(ctx context.Context, conn SessionConn) error {
 	case <-timer.C:
 		return fmt.Errorf("sync: session %s: timed out waiting for peer index", conn.PeerID())
 	case <-sctx.Done():
+		s.mu.Lock()
+		ierr := s.indexErr
+		s.mu.Unlock()
+		if ierr != nil {
+			return ierr
+		}
 		return fmt.Errorf("sync: session %s: %w", conn.PeerID(), sctx.Err())
 	}
 
@@ -174,6 +208,17 @@ func (e *Engine) RunSession(ctx context.Context, conn SessionConn) error {
 			// Defense layer 2: never let a bad remote path near
 			// the planner or the filesystem.
 			e.recordError(conn.PeerID(), en.Path, "bad_remote_path", verr.Error())
+			continue
+		}
+		if isMetaTreePath(en.Path) {
+			// The path is syntactically valid but points into
+			// our own metadata tree (.filesync/versions, trash,
+			// partial): a peer planting files there would forge
+			// our data-loss safety net and the entry would be
+			// re-advertised to the whole mesh. Reject it like
+			// any other bad remote path.
+			e.recordError(conn.PeerID(), en.Path, "bad_remote_path",
+				"remote path inside FileSync metadata tree")
 			continue
 		}
 		remote = append(remote, en)
@@ -239,7 +284,25 @@ func (s *session) dispatch(m proto.Message) {
 		case proto.TypeIndex:
 			entries := decodeIndexPayload(m)
 			s.mu.Lock()
-			s.remote = append(s.remote, entries...)
+			s.indexBytes += int64(len(m.Payload))
+			over := s.indexErr == nil &&
+				(len(s.remote)+len(entries) > maxIndexEntriesPerRound ||
+					s.indexBytes > maxIndexBytesPerRound)
+			if over {
+				s.indexErr = fmt.Errorf(
+					"sync: session %s: peer index exceeded round limits (%d entries, %d payload bytes)",
+					s.peerID(), len(s.remote)+len(entries), s.indexBytes)
+				s.mu.Unlock()
+				s.e.recordError(s.peerID(), "", proto.CodeMessageTooLarge,
+					"peer index exceeded per-round accumulated limits; round aborted")
+				if s.cancel != nil {
+					s.cancel()
+				}
+				return
+			}
+			if s.indexErr == nil {
+				s.remote = append(s.remote, entries...)
+			}
 			s.mu.Unlock()
 			if !m.Header.More {
 				s.indexOnce.Do(func() { close(s.indexDone) })
@@ -272,16 +335,30 @@ func (s *session) dispatch(m proto.Message) {
 // proto decoder rejects the whole batch when ONE entry is bad, but a
 // buggy peer must not be able to hide every other entry that way —
 // fall back to per-entry decoding and let the planner-side filter
-// drop the bad ones individually.
+// drop the bad ones individually. The fallback honors the same
+// per-message cap as the strict path (proto.MaxIndexBatch): entries
+// past the cap are dropped, and an entry that fails to decode is
+// skipped without taking the rest of the batch down with it.
 func decodeIndexPayload(m proto.Message) []store.Entry {
 	if entries, err := m.Entries(); err == nil {
 		return entries
 	}
-	var raw []store.Entry
+	var raw []json.RawMessage
 	if err := json.Unmarshal(m.Payload, &raw); err != nil {
 		return nil
 	}
-	return raw
+	if len(raw) > proto.MaxIndexBatch {
+		raw = raw[:proto.MaxIndexBatch]
+	}
+	out := make([]store.Entry, 0, len(raw))
+	for _, r := range raw {
+		var en store.Entry
+		if err := json.Unmarshal(r, &en); err != nil {
+			continue
+		}
+		out = append(out, en)
+	}
+	return out
 }
 
 func (s *session) handlePeerError(m proto.Message) {

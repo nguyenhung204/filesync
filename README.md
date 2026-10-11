@@ -233,8 +233,10 @@ listen address.
   single-instance check cannot distinguish PID reuse.
 - The **full index is exchanged every round** (D11): trees far
   beyond the verified 10k files will pay index bandwidth per
-  round. The in-flight disk-space budget (D12) is per-process
-  advisory only.
+  round. One round's index is also capped (1M entries / 256 MiB
+  of payload, accumulated across batches) as an anti-DoS bound —
+  a peer streaming more than that has its round aborted. The
+  in-flight disk-space budget (D12) is per-process advisory only.
 - A single index entry carries the file's whole chunk list
   (~90 bytes of JSON per 1 MiB chunk): past roughly 30–45 GiB in
   one file, the entry alone can exceed the 4 MiB index message
