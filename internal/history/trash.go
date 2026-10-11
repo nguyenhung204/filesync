@@ -39,16 +39,12 @@ func (m *Manager) MoveToTrash(rel string, vector vclock.VersionVector, updatedBy
 	if m.Store == nil {
 		return "", fmt.Errorf("history: move to trash %q: no store configured", rel)
 	}
-	src, err := safefile.Resolve(m.Root, rel, m.maxLen())
-	if err != nil {
-		return "", err
-	}
-	info, err := os.Stat(src)
+	// No-follow source check: the file itself and every parent component
+	// must be symlink-free, so a planted link can never cause a file
+	// outside the root to be moved into trash.
+	src, info, err := safefile.RequireRegularFile(m.Root, rel, m.maxLen())
 	if err != nil {
 		return "", fmt.Errorf("history: move to trash %q: %w", rel, err)
-	}
-	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("history: move to trash %q: not a regular file", rel)
 	}
 	dir := m.trashDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -169,9 +165,12 @@ func (m *Manager) RestoreFromTrash(name string) error {
 		return fmt.Errorf("history: restore from trash %q: decode sidecar: %w", name, err)
 	}
 	src := filepath.Join(dir, name)
-	info, err := os.Stat(src)
+	info, err := safefile.LstatNoFollow(m.Root, src)
 	if err != nil {
 		return fmt.Errorf("history: restore from trash %q: %w", name, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("history: restore from trash %q: not a regular file", name)
 	}
 	// Archive whatever currently sits at the target so restoring never
 	// silently destroys a newer live file.

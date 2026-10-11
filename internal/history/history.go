@@ -9,6 +9,7 @@ package history
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -113,19 +114,24 @@ func stampName(dir, base string, ts time.Time) string {
 // which are FileSync-owned copies, never the live file. A missing file
 // is not an error: ("", nil) means there was nothing to archive.
 func (m *Manager) Archive(rel string) (string, error) {
-	src, err := safefile.Resolve(m.Root, rel, m.maxLen())
+	return m.archive(rel, "")
+}
+
+// archive is Archive with one extra guarantee: the version file at
+// protect (an absolute path inside this file's versions directory, ""
+// for none) is never deleted by this call's own prune/quota pass.
+// Restore uses it so archiving the live file cannot destroy the very
+// version that is about to be restored.
+func (m *Manager) archive(rel string, protect string) (string, error) {
+	// No-follow source check: a symlink (file or parent component) is
+	// rejected outright, so content outside the root can never be
+	// copied into history through a planted link.
+	src, info, err := safefile.RequireRegularFile(m.Root, rel, m.maxLen())
 	if err != nil {
-		return "", err
-	}
-	info, err := os.Stat(src)
-	if os.IsNotExist(err) {
-		return "", nil
-	}
-	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", nil
+		}
 		return "", fmt.Errorf("history: archive %q: %w", rel, err)
-	}
-	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("history: archive %q: not a regular file", rel)
 	}
 	dir, err := m.versionsDirFor(rel)
 	if err != nil {
@@ -145,7 +151,13 @@ func (m *Manager) Archive(rel string) (string, error) {
 		return "", fmt.Errorf("history: archive %q: %w", rel, err)
 	}
 	defer f.Close()
-	tmp, err := os.CreateTemp(dir, ".filesync-tmp-*")
+	// The open must land on the very file the no-follow check approved:
+	// if the path was swapped in between, the descriptor points at a
+	// different file and the archive is refused.
+	if opened, err := f.Stat(); err != nil || !os.SameFile(info, opened) {
+		return "", fmt.Errorf("history: archive %q: file changed while opening", rel)
+	}
+	tmp, err := os.CreateTemp(dir, safefile.TempPrefix+"*")
 	if err != nil {
 		return "", fmt.Errorf("history: archive %q: %w", rel, err)
 	}
@@ -173,10 +185,10 @@ func (m *Manager) Archive(rel string) (string, error) {
 	// name stamp, but restores should carry the archived file's times.
 	_ = os.Chtimes(dst, info.ModTime(), info.ModTime())
 
-	if err := m.pruneKeep(rel); err != nil {
+	if err := m.pruneKeep(rel, protect); err != nil {
 		return "", err
 	}
-	if err := m.enforceQuota(dst); err != nil {
+	if err := m.enforceQuota(dst, protect); err != nil {
 		return "", err
 	}
 	return MetaDir + "/versions/" + clean + "/" + name, nil
@@ -198,7 +210,7 @@ func (m *Manager) listVersionFiles(rel string) ([]string, error) {
 	}
 	names := []string{}
 	for _, e := range ents {
-		if e.Type().IsRegular() && !strings.HasPrefix(e.Name(), ".filesync-tmp-") {
+		if e.Type().IsRegular() && !strings.HasPrefix(e.Name(), safefile.TempPrefix) {
 			names = append(names, e.Name())
 		}
 	}
@@ -228,7 +240,10 @@ func (m *Manager) ListVersions(rel string) ([]VersionInfo, error) {
 	return out, nil
 }
 
-func (m *Manager) pruneKeep(rel string) error {
+// pruneKeep drops the oldest versions of rel down to the keep count.
+// The file at protect (absolute path, "" for none) is skipped: it is
+// never pruned by the call that is about to depend on it.
+func (m *Manager) pruneKeep(rel string, protect string) error {
 	names, err := m.listVersionFiles(rel)
 	if err != nil {
 		return err
@@ -238,22 +253,40 @@ func (m *Manager) pruneKeep(rel string) error {
 		return err
 	}
 	for len(names) > m.Keep {
-		if err := os.Remove(filepath.Join(dir, names[0])); err != nil {
-			return fmt.Errorf("history: prune version %q: %w", names[0], err)
+		idx := -1
+		for i, n := range names {
+			if filepath.Join(dir, n) != protect {
+				idx = i
+				break
+			}
 		}
-		names = names[1:]
+		if idx < 0 {
+			return nil // only the protected version remains over the limit; keep it
+		}
+		if err := os.Remove(filepath.Join(dir, names[idx])); err != nil {
+			return fmt.Errorf("history: prune version %q: %w", names[idx], err)
+		}
+		names = append(names[:idx], names[idx+1:]...)
 	}
 	return nil
 }
 
 // enforceQuota deletes the globally oldest version files until the
-// versions tree fits the quota. The file at protect (just archived) is
-// never deleted by this call, and a tree containing only it is left alone
-// even if it alone exceeds the quota — dropping the newest copy to satisfy
-// an accounting rule would defeat the purpose of archiving it.
-func (m *Manager) enforceQuota(protect string) error {
+// versions tree fits the quota. Files at the protect paths (the version
+// just archived, plus any version a caller is about to depend on, e.g.
+// a restore target) are never deleted by this call, and a tree
+// containing only protected files is left alone even if it alone
+// exceeds the quota — dropping the newest copy to satisfy an accounting
+// rule would defeat the purpose of archiving it.
+func (m *Manager) enforceQuota(protects ...string) error {
 	if m.QuotaBytes <= 0 {
 		return nil
+	}
+	protected := map[string]bool{}
+	for _, p := range protects {
+		if p != "" {
+			protected[p] = true
+		}
 	}
 	versionsRoot := filepath.Join(m.Root, MetaDir, "versions")
 	for {
@@ -272,7 +305,7 @@ func (m *Manager) enforceQuota(protect string) error {
 				return err
 			}
 			total += info.Size()
-			if p != protect && (oldestPath == "" || d.Name() < oldestName) {
+			if !protected[p] && (oldestPath == "" || d.Name() < oldestName) {
 				oldestPath, oldestName = p, d.Name()
 			}
 			return nil
@@ -304,11 +337,18 @@ func (m *Manager) Restore(rel, version string) error {
 		return err
 	}
 	src := filepath.Join(dir, version)
-	info, err := os.Stat(src)
+	info, err := safefile.LstatNoFollow(m.Root, src)
 	if err != nil {
 		return fmt.Errorf("history: restore %q version %q: %w", rel, version, err)
 	}
-	if _, err := m.Archive(rel); err != nil {
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("history: restore %q version %q: not a regular file", rel, version)
+	}
+	// Archive the live file BEFORE overwriting it — with the restore
+	// target protected, so the archive's prune/quota pass cannot delete
+	// the very version being restored (the classic case: restoring the
+	// oldest version while the file is already at the keep limit).
+	if _, err := m.archive(rel, src); err != nil {
 		return err
 	}
 	f, err := os.Open(src)
