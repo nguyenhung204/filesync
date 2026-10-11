@@ -201,11 +201,61 @@ func TestElevationCommand(t *testing.T) {
 	self := `C:\Users\A B\Downloads\FileSync-Setup.exe`
 	cmd := elevationCommand(self, "--elevated")
 	for _, want := range []string{
-		"Start-Process", `-FilePath "` + self + `"`, "-Verb RunAs",
-		"-Wait", `-ArgumentList "--elevated"`, "exit $p.ExitCode",
+		"Start-Process", "-FilePath '" + self + "'", "-Verb RunAs",
+		"-Wait", "-ArgumentList '--elevated'",
+		"try {", "catch { exit 1 }", "if ($null -eq $p) { exit 1 }",
+		"exit $p.ExitCode",
 	} {
 		if !strings.Contains(cmd, want) {
 			t.Errorf("elevation command %q missing %q", cmd, want)
+		}
+	}
+	// The exe path must never sit in a double-quoted PowerShell
+	// string: $(...) and backtick escapes still execute there.
+	if strings.Contains(cmd, `-FilePath "`) {
+		t.Errorf("exe path double-quoted in elevation command: %q", cmd)
+	}
+}
+
+// psOutsideLiterals returns the parts of a PowerShell payload
+// that are NOT inside single-quoted string literals ('' inside a
+// literal is an escaped quote, per PowerShell rules). Anything
+// dangerous in the output is live code; anything inside a literal
+// is inert data.
+func psOutsideLiterals(payload string) string {
+	var b strings.Builder
+	inStr := false
+	for i := 0; i < len(payload); i++ {
+		c := payload[i]
+		if c == '\'' {
+			if inStr && i+1 < len(payload) && payload[i+1] == '\'' {
+				i++ // escaped quote, still inside the literal
+				continue
+			}
+			inStr = !inStr
+			continue
+		}
+		if !inStr {
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
+func TestElevationCommandEvilPath(t *testing.T) {
+	// A folder name on Windows may legally contain $, parens, a
+	// backtick and an apostrophe. Inside a double-quoted string
+	// the $(...) would execute in the parent shell before the
+	// UAC prompt; psQuote must neutralise the whole path.
+	evil := "C:\\Users\\$(calc) O'Neil\\`x\\FileSync-Setup.exe"
+	cmd := elevationCommand(evil, "--elevated")
+	if !strings.Contains(cmd, "-FilePath "+psQuote(evil)) {
+		t.Errorf("evil path not psQuote-wrapped: %q", cmd)
+	}
+	out := psOutsideLiterals(cmd)
+	for _, bad := range []string{"$(", "`", "calc", "FileSync-Setup"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("payload fragment %q leaked outside string literals: %q (outside: %q)", bad, cmd, out)
 		}
 	}
 }

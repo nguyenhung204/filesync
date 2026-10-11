@@ -156,13 +156,26 @@ func parseInitOutput(output string) initInfo {
 // elevationCommand builds the PowerShell -Command payload that
 // relaunches exePath elevated with the extra args appended. The
 // parent waits for the child and exits with the child's exit code.
+//
+// exePath and the argument list are quoted with psQuote (single
+// quotes). Inside a double-quoted PowerShell string, $(...)
+// subexpressions and backtick escapes still execute, so an exe
+// sitting in a folder whose name contains those characters would
+// run attacker-chosen code in this still-unelevated parent shell
+// before the UAC prompt even appears.
+//
+// If the user cancels or refuses the UAC prompt, Start-Process
+// throws (or, defensively, yields no process): the payload exits
+// 1 in both cases instead of dereferencing a null $p, which can
+// exit 0 and make the parent close without a word.
 func elevationCommand(exePath string, extraArgs ...string) string {
 	argList := ""
 	if len(extraArgs) > 0 {
-		argList = ` -ArgumentList "` + strings.Join(extraArgs, " ") + `"`
+		argList = " -ArgumentList " + psQuote(strings.Join(extraArgs, " "))
 	}
-	return `$p = Start-Process -FilePath "` + exePath + `" -Verb RunAs -Wait -PassThru` +
-		argList + `; exit $p.ExitCode`
+	return "try { $p = Start-Process -FilePath " + psQuote(exePath) +
+		" -Verb RunAs -Wait -PassThru" + argList +
+		" } catch { exit 1 }; if ($null -eq $p) { exit 1 }; exit $p.ExitCode"
 }
 
 // psQuote quotes s as a PowerShell single-quoted string literal

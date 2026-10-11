@@ -84,9 +84,7 @@ func svcRelayElevated(e *env) int {
 		svcWaitEnter(e)
 		return 1
 	}
-	payload := `$p = Start-Process -FilePath "` + self +
-		`" -Verb RunAs -Wait -PassThru -ArgumentList "uninstall-service --elevated"; exit $p.ExitCode`
-	res := svcRun("powershell", "-NoProfile", "-Command", payload)
+	res := svcRun("powershell", "-NoProfile", "-Command", svcElevationPayload(self))
 	if res.code != 0 {
 		fmt.Fprintln(e.stdout, "[LOI] Khong nang quyen duoc (hop thoai bi huy hoac bi tu choi).")
 		fmt.Fprintln(e.stdout, "Hay mo PowerShell quyen admin va chay: filesync.exe uninstall-service")
