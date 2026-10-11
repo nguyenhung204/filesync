@@ -109,7 +109,10 @@ func (e *Engine) RunSession(ctx context.Context, conn SessionConn) error {
 		return fmt.Errorf("sync: session %s: snapshot local index: %w", conn.PeerID(), err)
 	}
 	s := newSession(e, conn, sctx, snapshot)
-	go s.readLoop(cancel)
+	pump := e.pumpFor(conn)
+	inbox := pump.subscribe()
+	defer pump.unsubscribe(inbox)
+	go s.dispatchLoop(inbox, pump, cancel)
 
 	if err := conn.WriteMessage(sctx, proto.Message{Header: proto.Header{Type: proto.TypeIndexRequest}}); err != nil {
 		return fmt.Errorf("sync: session %s: send index request: %w", conn.PeerID(), err)
@@ -175,15 +178,26 @@ func (e *Engine) RunSession(ctx context.Context, conn SessionConn) error {
 	return nil
 }
 
-// readLoop is the session's only reader: it dispatches every inbound
-// message until the connection fails, then cancels the session.
-func (s *session) readLoop(cancel context.CancelFunc) {
-	defer cancel()
+// dispatchLoop feeds the session from the connection pump's
+// inbox (see pump.go for why the engine owns exactly one reader
+// per connection). It ends with the session, and cancels the
+// session when the connection dies.
+func (s *session) dispatchLoop(inbox chan proto.Message, pump *connPump, cancel context.CancelFunc) {
 	for {
-		m, err := s.conn.ReadMessage(s.ctx)
-		if err != nil {
+		select {
+		case <-s.ctx.Done():
 			return
+		case <-pump.dead:
+			cancel()
+			return
+		case m := <-inbox:
+			s.dispatch(m)
 		}
+	}
+}
+
+func (s *session) dispatch(m proto.Message) {
+	{
 		switch m.Header.Type {
 		case proto.TypeIndexRequest:
 			s.serveWG.Add(1)

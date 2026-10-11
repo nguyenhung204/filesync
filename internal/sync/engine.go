@@ -77,6 +77,9 @@ type Engine struct {
 	budgetMu sync.Mutex
 	inflight int64 // bytes still owed to in-flight pulls, all peers (D12)
 
+	pumpsMu sync.Mutex
+	pumps   map[SessionConn]*connPump
+
 	// Test seams (same-package tests only); nil means the real thing.
 	freeSpaceFn func(path string) (int64, error)
 	archiveFn   func(rel string) (string, error)
@@ -108,6 +111,7 @@ func NewEngine(cfg config.Config, id *identity.Identity, st *store.Store, hist *
 		now:         now,
 		parallelism: par,
 		pulls:       make(map[string]*PullState),
+		pumps:       make(map[SessionConn]*connPump),
 	}
 }
 
