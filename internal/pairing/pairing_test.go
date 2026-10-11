@@ -128,6 +128,36 @@ func wrongCode(code string) string {
 	return "000001"
 }
 
+// waitPending blocks until m has registered the pending session
+// with sessionID. The acceptor registers its side asynchronously in
+// the HandleConn goroutine, while DialPair returns as soon as the
+// INITIATOR side is registered — confirming on the acceptor without
+// this wait races the registration and flakes with "unknown or
+// expired session" (round-1 tester finding). Every test that
+// confirms/rejects on the acceptor must wait here first.
+func waitPending(t *testing.T, m *Manager, sessionID string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for m.getPending(sessionID) == nil {
+		if time.Now().After(deadline) {
+			t.Fatalf("session %s never became pending", sessionID)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// waitNoPending blocks until m has no pending sessions left.
+func waitNoPending(t *testing.T, m *Manager) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for m.pendingCount() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("manager still has %d pending sessions", m.pendingCount())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // pairUp runs a full happy-path pairing between initiator a and
 // acceptor b and returns the code that was used.
 func pairUp(t *testing.T, a, b *pairNode) string {
@@ -146,6 +176,7 @@ func pairUp(t *testing.T, a, b *pairNode) string {
 	if err := a.pm.ConfirmFingerprint(pp.SessionID); err != nil {
 		t.Fatalf("ConfirmFingerprint (initiator): %v", err)
 	}
+	waitPending(t, b.pm, pp.SessionID)
 	if err := b.pm.ConfirmFingerprint(pp.SessionID); err != nil {
 		t.Fatalf("ConfirmFingerprint (acceptor): %v", err)
 	}
@@ -264,6 +295,21 @@ func TestPairCodeOneTime(t *testing.T) {
 	b.serve(t, nil)
 
 	code := pairUp(t, a, b)
+	// Finalization (and with it the code's consumption) completes
+	// asynchronously in the acceptor's session goroutine after both
+	// ConfirmFingerprint calls return. Wait until the code record is
+	// actually gone — reusing the code in the gap would legitimately
+	// still find an open window (round-2 flake fix).
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, found := loadRecordForTest(t, b); !found {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("code record not consumed after successful pairing")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	_, err := a.pm.DialPair(context.Background(), a.tm, b.tm.Addr(), code)
 	if err == nil || !strings.Contains(err.Error(), "pairing_unavailable") {
 		t.Fatalf("reused code: err = %v, want pairing_unavailable", err)
@@ -316,6 +362,7 @@ func TestPairOneSideRejects(t *testing.T) {
 	if err := a.pm.ConfirmFingerprint(pp.SessionID); err != nil {
 		t.Fatalf("ConfirmFingerprint: %v", err)
 	}
+	waitPending(t, b.pm, pp.SessionID)
 	if err := b.pm.RejectFingerprint(pp.SessionID); err != nil {
 		t.Fatalf("RejectFingerprint: %v", err)
 	}
