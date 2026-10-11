@@ -66,10 +66,21 @@ func (d *Daemon) reconcile(ctx context.Context) {
 		}
 	}
 	d.mu.Unlock()
+	// Snapshot the dead IDs under the lock: peerRT is written by
+	// claimSlot/releaseSlot on other goroutines, so iterating the
+	// map here unlocked would be a concurrent map iteration+write
+	// (fatal, unrecoverable). ClosePeerConns is called only after
+	// the lock is released.
+	d.mu.Lock()
+	dead := make([]string, 0, len(d.peerRT))
 	for id := range d.peerRT {
 		if !live[id] {
-			d.tm.ClosePeerConns(id)
+			dead = append(dead, id)
 		}
+	}
+	d.mu.Unlock()
+	for _, id := range dead {
+		d.tm.ClosePeerConns(id)
 	}
 	d.mu.Lock()
 	for id, rt := range d.peerRT {
