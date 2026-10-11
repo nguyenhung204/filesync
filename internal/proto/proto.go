@@ -26,8 +26,13 @@ const ProtocolVersion = 1
 // Size limits. A peer-supplied length never controls allocation beyond
 // these bounds (threat 3 in docs/threats.md).
 const (
-	MaxHeaderBytes       = 64 << 10 // 64 KiB
-	MaxIndexPayloadBytes = 4 << 20  // 4 MiB
+	// MaxHeaderBytes is capped at 0xFFFF (not 64 KiB): the frame
+	// carries headerLen in a uint16 field, so a 65536-byte header
+	// could never be represented — it would wrap to 0 on write
+	// (round-2 fix; the limit is a comment's width below 64 KiB and
+	// real headers are ≲10 KiB).
+	MaxHeaderBytes       = 0xFFFF
+	MaxIndexPayloadBytes = 4 << 20 // 4 MiB
 	MaxFrameBytes        = 2 + MaxHeaderBytes + MaxIndexPayloadBytes
 	MaxIndexBatch        = 1000 // entries per Index message
 	MaxChunkIndexes      = 1024 // indexes per ChunkRequest

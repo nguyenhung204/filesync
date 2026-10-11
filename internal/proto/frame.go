@@ -29,7 +29,10 @@ func WriteMessage(w io.Writer, m Message) error {
 		return fmt.Errorf("proto: encode header: %w", err)
 	}
 	if len(hdr) > MaxHeaderBytes {
-		return fmt.Errorf("%w: header %d bytes exceeds %d", ErrTooLarge, len(hdr), MaxHeaderBytes)
+		// Header-size violations are ErrBadMessage, matching the
+		// read-path check order in the spec (step 3); ErrTooLarge is
+		// reserved for the frame length itself.
+		return fmt.Errorf("%w: header %d bytes exceeds %d", ErrBadMessage, len(hdr), MaxHeaderBytes)
 	}
 	frameLen := 2 + len(hdr) + len(m.Payload)
 	if frameLen > MaxFrameBytes {
@@ -66,7 +69,7 @@ func ReadMessage(r io.Reader) (Message, error) {
 	}
 	headerLen := int(binary.BigEndian.Uint16(buf))
 	if headerLen > MaxHeaderBytes {
-		return Message{}, fmt.Errorf("%w: header length %d", ErrTooLarge, headerLen)
+		return Message{}, badf("header length %d exceeds %d", headerLen, MaxHeaderBytes)
 	}
 	if 2+headerLen > len(buf) {
 		return Message{}, badf("header length %d exceeds frame %d", headerLen, len(buf))
