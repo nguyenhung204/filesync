@@ -79,18 +79,32 @@ systemctl --user daemon-reload
 systemctl --user enable --now filesync
 ```
 
-### Windows (service via sc.exe)
+### Windows
 
-**One-click (recommended):** download a release (or build `filesync.exe`),
-put `filesync.exe` together with `install-service.ps1`,
-`uninstall-service.ps1`, `cai-dat-filesync.bat` and
-`go-cai-dat-filesync.bat` (all in `deploy/windows/`) in one folder, then
-double-click `cai-dat-filesync.bat`. It copies the binary, runs `init`,
-asks for admin rights to register the service, and only reports success
-after the service has been verified RUNNING. To remove the service later,
-double-click `go-cai-dat-filesync.bat` (config and synced data are kept).
+**Recommended: the one-file installer.** Download `FileSync-Setup.exe`
+from a GitHub Release and double-click it. It asks for admin rights,
+installs `filesync.exe`, runs `init`, registers the auto-start service,
+and only reports success after the service has been verified RUNNING.
+It also adds a **FileSync** shortcut to the Start Menu (it opens the
+web management UI) and a standard entry in Windows Settings >
+Apps, where you can uninstall it again (uninstalling removes the
+service, the shortcut and the registry entry; your config and synced
+data are kept).
 
-Manual alternative, from an **elevated** PowerShell:
+Upgrades are data-safe: running a newer `FileSync-Setup.exe` just
+replaces the binary and re-registers the service. The installer never
+writes to or deletes your config dir (`%APPDATA%\filesync`, which
+holds your device identity) or your sync folder, and `init` is
+idempotent, so your device ID survives upgrades.
+
+Note: the installer is not code-signed yet, so Windows SmartScreen
+may ask once on first run — choose *More info > Run anyway*.
+
+**Fallback (manual scripts):** the release zip also carries
+`filesync.exe` plus `install-service.ps1`, `uninstall-service.ps1`,
+`cai-dat-filesync.bat` and `go-cai-dat-filesync.bat` (sources in
+`deploy/windows/`). Put them in one folder and double-click
+`cai-dat-filesync.bat`, or from an **elevated** PowerShell:
 
 ```powershell
 mkdir "$env:LOCALAPPDATA\Programs\filesync" -Force
