@@ -124,6 +124,22 @@ func TestChunkDataValidation(t *testing.T) {
 		{"sha not hex", func(m *Message) { m.Header.SHA256 = strings.Repeat("z", 64) }},
 		{"negative index", func(m *Message) { m.Header.Index = -1 }},
 		{"bad path", func(m *Message) { m.Header.Path = "../escape" }},
+		{"unknown encoding", func(m *Message) { m.Header.Encoding = "zstd" }},
+		{"encoding on non-chunk type", func(m *Message) {
+			m.Header.Type = TypePing
+			m.Header.Encoding = EncodingGzip
+			m.Payload = nil
+		}},
+		{"gzip payload too large", func(m *Message) {
+			m.Header.Encoding = EncodingGzip
+			m.Payload = make([]byte, MaxGzipPayloadBytes+1)
+			// Size stays the small raw size of "hello"; only the
+			// compressed-payload ceiling is violated.
+		}},
+		{"gzip raw size too big", func(m *Message) {
+			m.Header.Encoding = EncodingGzip
+			m.Header.Size = chunk.ChunkSize + 1
+		}},
 	}
 	for _, tc := range cases {
 		m := good
@@ -135,6 +151,21 @@ func TestChunkDataValidation(t *testing.T) {
 	}
 	if err := good.Validate(); err != nil {
 		t.Errorf("good message rejected: %v", err)
+	}
+	// A valid gzip chunk: Size is the RAW size and deliberately
+	// differs from the compressed payload length.
+	raw := bytes.Repeat([]byte("a"), 1000)
+	payload, enc := CompressChunkPayload(raw)
+	if enc != EncodingGzip {
+		t.Fatalf("CompressChunkPayload(1000 repeated bytes) encoding = %q, want gzip", enc)
+	}
+	sum := sha256.Sum256(raw)
+	gz := Message{Header: Header{
+		Type: TypeChunkData, Path: "dir/file.bin", Index: 0,
+		Size: len(raw), SHA256: hex.EncodeToString(sum[:]), Encoding: enc,
+	}, Payload: payload}
+	if err := gz.Validate(); err != nil {
+		t.Errorf("valid gzip chunk rejected: %v", err)
 	}
 }
 
