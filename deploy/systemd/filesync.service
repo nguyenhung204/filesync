@@ -1,0 +1,15 @@
+[Unit]
+Description=FileSync — two-way file sync without a cloud (LAN, phase 1)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/filesync serve
+Restart=on-failure
+RestartSec=5
+# The daemon serves the user's own files as the user; no privilege
+# separation beyond the account itself in phase 1.
+
+[Install]
+WantedBy=default.target
