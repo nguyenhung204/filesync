@@ -91,23 +91,22 @@ func TestSessionMetaTreeEntriesRejected(t *testing.T) {
 	}
 }
 
-// floodPeer streams index batches with More=true forever (valid
-// entries, honest chunk serving for anything actually requested)
-// until the connection dies. It models the round-1 IMPORTANT 2
-// attacker: per-message limits all pass; only an accumulated cap
-// stops the growth.
-type floodPeer struct {
-	conn      *fakeConn
-	batchSize int
-	done      chan struct{}
 
-	mu   sync.Mutex
-	sent int // entries streamed so far
+// floodPeer streams valid index batches with More=true forever
+// until the connection dies. It models the round-1 IMPORTANT 2
+// attacker: every per-message limit passes; only an accumulated
+// cap stops the growth.
+type floodPeer struct {
+	conn *fakeConn
+	done chan struct{}
+
+	mu        sync.Mutex
+	sentBytes int64
 }
 
 func (p *floodPeer) run(ctx context.Context) {
 	defer close(p.done)
-	batch := make([]store.Entry, p.batchSize)
+	batch := make([]store.Entry, proto.MaxIndexBatch)
 	for n := 0; ; n++ {
 		// Re-stamp the batch with fresh paths so the receiver
 		// cannot dedupe its way out of the growth.
@@ -123,7 +122,7 @@ func (p *floodPeer) run(ctx context.Context) {
 			return
 		}
 		p.mu.Lock()
-		p.sent += len(batch)
+		p.sentBytes += int64(len(payload))
 		p.mu.Unlock()
 		// Answer whatever the engine asks while it is still
 		// willing to talk (index requests, acks).
@@ -139,24 +138,36 @@ func (p *floodPeer) run(ctx context.Context) {
 	}
 }
 
-func (p *floodPeer) sentEntries() int {
+func (p *floodPeer) bytesSent() int64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.sent
+	return p.sentBytes
+}
+
+// lowerIndexCaps shrinks the per-round index caps for a test and
+// restores them afterwards.
+func lowerIndexCaps(t *testing.T, entries int, bytes int64) {
+	t.Helper()
+	oldE, oldB := maxIndexEntriesPerRound, maxIndexBytesPerRound
+	maxIndexEntriesPerRound, maxIndexBytesPerRound = entries, bytes
+	t.Cleanup(func() { maxIndexEntriesPerRound, maxIndexBytesPerRound = oldE, oldB })
 }
 
 // TestSessionIndexFloodCapped is the regression test for round-1
 // IMPORTANT 2: session.dispatch appended every index batch to
 // s.remote with no accumulated limit, so a peer streaming valid
 // 1000-entry batches with More=true grew the heap ~56 MiB/s until
-// the OOM killer beat the 60s index timeout. The round must now
-// abort at the accumulated caps (entries AND payload bytes),
-// quickly and with a named error; nothing from the flood may
-// reach the store, and a normal round afterwards must still work.
+// the OOM killer beat the 60s index timeout. (The production caps
+// are 1M entries / 256 MiB; they are lowered here so the test
+// streams kilobytes, not gigabytes — the mechanism is identical.)
+// The round must abort at the caps, quickly and with a named
+// error; nothing from the flood may reach the store, and a normal
+// round afterwards must still work.
 func TestSessionIndexFloodCapped(t *testing.T) {
+	lowerIndexCaps(t, 1_000_000, 8<<20)
 	n := newTestNode(t)
 	engConn, peerConn := newFakeConnPair(n.id.DeviceID, scriptID)
-	fp := &floodPeer{conn: peerConn, batchSize: proto.MaxIndexBatch, done: make(chan struct{})}
+	fp := &floodPeer{conn: peerConn, done: make(chan struct{})}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -168,6 +179,7 @@ func TestSessionIndexFloodCapped(t *testing.T) {
 	// Stop the flood before asserting on its counters.
 	_ = peerConn.Close()
 	<-fp.done
+
 	if err == nil {
 		t.Fatal("flooded session round succeeded; want an index-limit abort")
 	}
@@ -177,11 +189,8 @@ func TestSessionIndexFloodCapped(t *testing.T) {
 	if elapsed > 20*time.Second {
 		t.Fatalf("flood abort took %v; the cap must bite well before the 60s index timeout", elapsed)
 	}
-	// The flood was cut at the caps, not at the peer's whim: the
-	// peer streamed far more than any legitimate round needs, but
-	// the engine stopped listening.
-	if fp.sentEntries() <= maxIndexEntriesPerRound {
-		t.Fatalf("peer only sent %d entries; test did not actually exceed the entry cap %d", fp.sentEntries(), maxIndexEntriesPerRound)
+	if fp.bytesSent() <= 8<<20 {
+		t.Fatalf("peer only sent %d payload bytes; test did not actually exceed the byte cap", fp.bytesSent())
 	}
 	entries, lerr := n.st.ListEntries()
 	if lerr != nil {
@@ -207,5 +216,62 @@ func TestSessionIndexFloodCapped(t *testing.T) {
 	runScriptedRound(t, n, p)
 	if data := readFile(t, n.root, "after.txt"); !bytes.Equal(data, good) {
 		t.Fatal("honest round after a flood abort did not sync")
+	}
+}
+
+// TestSessionIndexEntryCap exercises the ENTRY cap directly at
+// dispatch level (fast, no wire): batches accumulate until the
+// cap, the crossing batch is dropped whole, the session is
+// cancelled, and the recorded reason names the limits.
+func TestSessionIndexEntryCap(t *testing.T) {
+	lowerIndexCaps(t, 5000, 1<<62)
+	n := newTestNode(t)
+	engConn, _ := newFakeConnPair(n.id.DeviceID, scriptID)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := newSession(n.eng, engConn, ctx, nil)
+	cancelled := false
+	s.cancel = func() { cancelled = true }
+
+	batch := make([]store.Entry, proto.MaxIndexBatch)
+	for i := range batch {
+		batch[i] = remoteEntry(fmt.Sprintf("cap/f%06d.txt", i), nil, 0)
+	}
+	payload, _ := json.Marshal(batch)
+	msg := proto.Message{Header: proto.Header{Type: proto.TypeIndex, More: true}, Payload: payload}
+
+	// 5 batches = exactly the cap: still accepted.
+	for b := 0; b < 5; b++ {
+		s.dispatch(msg)
+	}
+	s.mu.Lock()
+	if s.indexErr != nil {
+		s.mu.Unlock()
+		t.Fatalf("cap tripped at exactly the limit: %v", s.indexErr)
+	}
+	held := len(s.remote)
+	s.mu.Unlock()
+	if held != 5000 {
+		t.Fatalf("session holds %d entries, want 5000", held)
+	}
+	// One more entry crosses it: the whole message is dropped,
+	// the error is set, and the session is cancelled.
+	one, _ := json.Marshal([]store.Entry{remoteEntry("cap/one-more.txt", nil, 0)})
+	s.dispatch(proto.Message{Header: proto.Header{Type: proto.TypeIndex, More: true}, Payload: one})
+	s.mu.Lock()
+	ierr := s.indexErr
+	held = len(s.remote)
+	s.mu.Unlock()
+	if ierr == nil {
+		t.Fatal("entry cap did not trip on the crossing entry")
+	}
+	if !strings.Contains(ierr.Error(), "index") || !strings.Contains(ierr.Error(), "limit") {
+		t.Fatalf("cap error does not name the index limit: %v", ierr)
+	}
+	if held != 5000 {
+		t.Fatalf("crossing message was partially appended: session holds %d entries", held)
+	}
+	if !cancelled {
+		t.Fatal("session was not cancelled when the cap tripped")
 	}
 }

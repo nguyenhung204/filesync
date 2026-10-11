@@ -45,9 +45,13 @@ const indexWaitTimeout = 60 * time.Second
 // and realistic mixed trees fit vastly more). A round that hits
 // a cap is aborted, the partial index is discarded with the
 // session, and the failure is recorded as message_too_large.
-const (
+//
+// These are vars, not consts, ONLY so tests can lower them and
+// exercise the caps without streaming a real 1M-entry index;
+// production code never writes them.
+var (
 	maxIndexEntriesPerRound = 1_000_000
-	maxIndexBytesPerRound   = 256 << 20 // 256 MiB
+	maxIndexBytesPerRound   = int64(256 << 20) // 256 MiB
 )
 
 // serveDrainGrace bounds the best-effort wait for in-flight chunk
