@@ -10,7 +10,9 @@ order:
   3. SIGTERM stops the daemon cleanly: exit code 0 and a final
      status.json state of "stopped".
 
-Usage: python3 scripts/smoke-test.py [path-to-filesync-binary]
+Usage: python3 scripts/smoke-test.py [--binary] [path-to-filesync-binary]
+Both `smoke-test.py /path/to/filesync` and
+`smoke-test.py --binary /path/to/filesync` are accepted.
 Exit 0 = PASS, exit 1 = FAIL with diagnosis on stderr.
 """
 
@@ -41,7 +43,10 @@ def read_status(cfg_dir):
 
 
 def main():
-    binary = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else "filesync")
+    args = sys.argv[1:]
+    if args[:1] == ["--binary"]:
+        args = args[1:]
+    binary = os.path.abspath(args[0] if args else "filesync")
     if not os.path.isfile(binary):
         fail(f"binary not found: {binary}")
 

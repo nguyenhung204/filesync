@@ -3,8 +3,6 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"path"
-	"regexp"
 	"strings"
 
 	"filesync/internal/history"
@@ -15,11 +13,6 @@ import (
 	"os"
 )
 
-// conflictSegmentRe matches the D3 conflict marker on the LAST
-// path segment: ` (conflict <shortID8> <ts>)` plus an optional
-// `-N` generation suffix and the preserved extension.
-var conflictSegmentRe = regexp.MustCompile(` \(conflict ([0-9A-Za-z]{8}) \d{8}T\d{6}Z\)(-\d+)?(\.[^/]*)?$`)
-
 type conflictInfo struct {
 	Original     string `json:"original"`
 	Conflict     string `json:"conflict"`
@@ -28,23 +21,9 @@ type conflictInfo struct {
 	SizeConflict int64  `json:"size_conflict"`
 }
 
-// parseConflict derives the original path and loser short ID from
-// a conflict copy path.
-func parseConflict(p string) (original, loserShort string, ok bool) {
-	dir, seg := path.Split(p)
-	loc := conflictSegmentRe.FindStringSubmatchIndex(seg)
-	if loc == nil {
-		return "", "", false
-	}
-	ext := ""
-	// Group 3 (extension) span: submatch indexes 3.
-	if loc[6] >= 0 {
-		ext = seg[loc[6]:loc[7]]
-	}
-	original = dir + seg[:loc[0]] + ext
-	loserShort = seg[loc[2]:loc[3]]
-	return original, loserShort, true
-}
+// Conflict paths are parsed by sync.ParseConflictPath — the single
+// implementation of the D3 naming rule, shared with the engine's
+// resolver so the CLI can never drift from it.
 
 func listConflicts(entries []store.Entry) []conflictInfo {
 	byPath := map[string]store.Entry{}
@@ -56,7 +35,7 @@ func listConflicts(entries []store.Entry) []conflictInfo {
 		if e.Tombstone {
 			continue
 		}
-		orig, loser, ok := parseConflict(e.Path)
+		orig, loser, ok := fsync.ParseConflictPath(e.Path)
 		if !ok {
 			continue
 		}

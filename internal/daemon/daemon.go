@@ -150,20 +150,27 @@ func (d *Daemon) scanCommit(ctx context.Context, scanner *index.Scanner) {
 		d.log.Warn(ctx, "daemon: commit scan failed", logx.Err(err))
 		return
 	}
-	if entries, err := d.st.ListEntries(); err == nil {
-		live := 0
-		for _, e := range entries {
-			if !e.Tombstone {
-				live++
-			}
-		}
-		d.mu.Lock()
-		d.indexedFiles = live
-		d.mu.Unlock()
-	}
+	d.refreshIndexedFiles()
 	if changed {
 		d.broadcastDirty()
 	}
+}
+
+// refreshIndexedFiles recounts live entries for the status file.
+func (d *Daemon) refreshIndexedFiles() {
+	entries, err := d.st.ListEntries()
+	if err != nil {
+		return
+	}
+	live := 0
+	for _, e := range entries {
+		if !e.Tombstone {
+			live++
+		}
+	}
+	d.mu.Lock()
+	d.indexedFiles = live
+	d.mu.Unlock()
 }
 
 // Run executes Flow 4 and blocks until ctx is cancelled or a fatal
@@ -381,6 +388,7 @@ func (d *Daemon) commitResult(ctx context.Context, res index.ScanResult) {
 		d.log.Warn(ctx, "daemon: commit scan failed", logx.Err(err))
 		return
 	}
+	d.refreshIndexedFiles()
 	if changed {
 		d.broadcastDirty()
 	}

@@ -1,9 +1,7 @@
 package sync
 
 import (
-	"bytes"
 	"fmt"
-	"io"
 	"os"
 
 	"filesync/internal/safefile"
@@ -104,13 +102,13 @@ func (e *Engine) ResolveConflictCopy(originalPath, conflictPath string, keep Kee
 		if err != nil {
 			return fmt.Errorf("sync: resolve conflict: open conflict copy: %w", err)
 		}
-		data, err := io.ReadAll(f)
+		// Stream the copy into the canonical path: conflict copies
+		// can be GiB-sized, so the whole file must never sit in
+		// RAM (WriteAtomicMaxLen takes any io.Reader).
+		werr := safefile.WriteAtomicMaxLen(e.cfg.SyncDir, c.Path, f, os.FileMode(k.Mode), e.cfg.MaxPathLength)
 		f.Close()
-		if err != nil {
-			return fmt.Errorf("sync: resolve conflict: read conflict copy: %w", err)
-		}
-		if err := safefile.WriteAtomicMaxLen(e.cfg.SyncDir, c.Path, bytes.NewReader(data), os.FileMode(k.Mode), e.cfg.MaxPathLength); err != nil {
-			return fmt.Errorf("sync: resolve conflict: write canonical: %w", err)
+		if werr != nil {
+			return fmt.Errorf("sync: resolve conflict: write canonical: %w", werr)
 		}
 		_, info, err := safefile.RequireRegularFile(e.cfg.SyncDir, c.Path, e.cfg.MaxPathLength)
 		if err != nil {

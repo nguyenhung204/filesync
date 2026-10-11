@@ -66,27 +66,30 @@ func (e *Engine) sendIndex(s *session, ctx context.Context) {
 // construction.
 func (e *Engine) serveChunkRequest(s *session, ctx context.Context, m proto.Message) {
 	req := m.Header
-	fail := func(format string, args ...any) {
+	fail := func(code, format string, args ...any) {
 		msg := fmt.Sprintf(format, args...)
 		_ = s.conn.WriteMessage(ctx, proto.Message{Header: proto.Header{
-			Type: proto.TypeError, Code: proto.CodeInternal, Message: msg,
+			Type: proto.TypeError, Code: code, Message: msg,
 			Path: req.Path, AckType: proto.TypeChunkRequest,
 		}})
 	}
 	src, ok := s.snapshotEntry(req.Path)
 	if !ok {
-		fail("stale entry: %s not in round index", req.Path)
+		// Spec Flow 1 step 4: a request against a generation the
+		// peer planned from but we no longer serve is a stale
+		// entry — bad_message, not an internal failure.
+		fail(proto.CodeBadMessage, "stale entry: %s not in round index", req.Path)
 		return
 	}
 	for _, ix := range req.Indexes {
 		if ix < 0 || ix >= len(src.Chunks) {
-			fail("stale entry: chunk index %d out of range for %s", ix, req.Path)
+			fail(proto.CodeBadMessage, "stale entry: chunk index %d out of range for %s", ix, req.Path)
 			return
 		}
 		meta := src.Chunks[ix]
 		data, err := e.readChunkByHash(src, meta)
 		if err != nil {
-			fail("chunk unavailable: %s#%d", req.Path, ix)
+			fail(proto.CodeInternal, "chunk unavailable: %s#%d", req.Path, ix)
 			return
 		}
 		payload, enc := proto.CompressChunkPayload(data)

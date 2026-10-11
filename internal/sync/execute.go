@@ -162,7 +162,13 @@ func (e *Engine) applyRename(s *session, a Action) bool {
 	ne.Size = info.Size()
 	ne.MtimeNs = info.ModTime().UnixNano()
 	ne.Mode = uint32(info.Mode().Perm())
-	_ = e.st.DeleteEntry(a.FromPath)
+	if err := e.st.DeleteEntry(a.FromPath); err != nil {
+		// The destination entry is already committed; a stale
+		// source entry self-heals at the next scan (the file is
+		// gone from disk), but the store error must not pass
+		// silently.
+		e.recordError(s.peerID(), a.FromPath, "internal", err.Error())
+	}
 	if err := e.st.UpsertEntry(ne); err != nil {
 		e.recordError(s.peerID(), a.Path, "internal", err.Error())
 	}
