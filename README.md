@@ -148,6 +148,28 @@ and `filesync restore <path>` (below), `filesync version`.
 Most read commands accept `--json`; every command accepts
 `--config-dir <dir>` (default: the per-user config dir).
 
+## Web UI
+
+Prefer clicking to typing? While the daemon runs it also serves a
+management page on this machine:
+
+```sh
+filesync ui     # prints the URL and opens it in your browser
+```
+
+Default address: `http://127.0.0.1:22080`. From there you can see
+sync status and warnings, pair new devices (create a code, or dial
+another machine's code — the fingerprint confirmation step stays
+manual, exactly like the CLI), revoke devices, resolve conflicts,
+browse version history and restore, and pause/resume syncing.
+
+The URL contains a secret access token — **do not share it**.
+Anyone with the token (or the `ui-token` file in the config dir)
+controls the daemon. Settings, in `config.json`: turn the UI off
+with `"ui_enabled": false`, or move it with `"ui_port": <port>`.
+To rotate the token: stop the daemon, delete the `ui-token` file
+in the config dir, start the daemon again.
+
 ## Handling conflicts by hand
 
 When both sides edit a file while disconnected, the winner (by
@@ -199,6 +221,8 @@ mode 0600; the config dir itself is 0700).
 | `version_history_quota_bytes` | `1 GiB` | total history size cap |
 | `max_path_length` | `240` | longest accepted relative path |
 | `rescan_interval_seconds` | `30` | periodic full rescan (safety net) |
+| `ui_enabled` | `true` | serve the web management UI |
+| `ui_port` | `22080` | loopback port of the web UI (0 = default) |
 
 Environment: `FILESYNC_DISABLE_MDNS=1` turns off mDNS discovery
 (static peer addresses still work; used by tests/CI).
@@ -212,6 +236,9 @@ listen address.
 
 ## Known limitations (phase 1, honestly)
 
+- **The web UI listens on 127.0.0.1 only** — it works solely in a
+  browser on the machine running the daemon; there is no
+  remote/LAN access to it.
 - **Fixed 1 MiB chunks, no content-defined chunking** (ADR-002):
   inserting one byte into a large file shifts every following
   chunk and re-sends them. Appends and in-place edits only
