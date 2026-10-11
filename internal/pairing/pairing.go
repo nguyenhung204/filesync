@@ -46,7 +46,13 @@ type codeRecord struct {
 	CodeHash  []byte `json:"code_hash"`  // SHA-256(salt || code)
 	ExpiresAt int64  `json:"expires_at"` // UnixNano, local wall clock (D8)
 	Attempts  int    `json:"attempts"`
-	BoundID   string `json:"bound_id,omitempty"` // first initiator to reach the challenge step
+	BoundID   string `json:"bound_id,omitempty"` // first initiator to SUBMIT a proof (round-2 change)
+	// Epoch identifies this code generation. CreateCode/CancelCode and
+	// every invalidation bump the Manager's epoch; a session carries
+	// the epoch it started under and is killed when it no longer
+	// matches, so a replaced code can never be used by a session that
+	// was opened under the old one (round-2 race fix).
+	Epoch uint64 `json:"epoch"`
 }
 
 // PendingPair is a pairing session whose proofs checked out and which
@@ -81,9 +87,18 @@ type Manager struct {
 
 	mu      sync.Mutex
 	randMu  sync.Mutex
-	key     []byte // codeKey of the active code; memory only, never persisted or logged
 	pending map[string]*pendingState
 	onProp  func(PendingPair)
+
+	// codeMu serializes the whole code-record lifecycle: every
+	// load → verify → persist sequence in HandleConn, CreateCode,
+	// CancelCode, invalidation and the record consumption in
+	// tryFinalize runs under it, so concurrent sessions can never
+	// lose an attempts update, double-bind the window, or finalize
+	// twice on one code (round-2 BLOCKER fix).
+	codeMu sync.Mutex
+	key    []byte // codeKey of the active code; memory only, never persisted or logged; guarded by codeMu
+	epoch  uint64 // generation of the active code window; guarded by codeMu
 }
 
 // NewManager builds a pairing Manager. closer may be nil (revoke then
@@ -124,6 +139,17 @@ func (m *Manager) readRand(b []byte) error {
 	return err
 }
 
+// lockedRand serializes reads from the configured randomness source
+// so concurrent sessions can safely draw nonces/session IDs from a
+// source that is not itself goroutine-safe.
+type lockedRand struct{ m *Manager }
+
+func (r lockedRand) Read(p []byte) (int, error) {
+	r.m.randMu.Lock()
+	defer r.m.randMu.Unlock()
+	return r.m.rand.Read(p)
+}
+
 func (m *Manager) randInt(max int64) (int64, error) {
 	m.randMu.Lock()
 	defer m.randMu.Unlock()
@@ -157,22 +183,31 @@ func (m *Manager) CreateCode() (string, time.Time, error) {
 		CodeHash:  h.Sum(nil),
 		ExpiresAt: m.now().Add(CodeTTL).UnixNano(),
 	}
+	// Persist + key swap + epoch bump are one atomic step under
+	// codeMu: sessions still running under the previous code see an
+	// epoch mismatch and are invalidated (Flow C.3: a new code
+	// replaces the old one completely).
+	m.codeMu.Lock()
+	rec.Epoch = m.epoch + 1
 	if err := m.storeRecord(rec); err != nil {
+		m.codeMu.Unlock()
 		return "", time.Time{}, err
 	}
-	m.mu.Lock()
+	m.epoch = rec.Epoch
 	m.key = codeKey(code)
-	m.mu.Unlock()
+	m.codeMu.Unlock()
 	expires := time.Unix(0, rec.ExpiresAt)
 	m.log.Info(nil, "pairing: code created", logx.String("expires", expires.Format(time.RFC3339)))
 	return code, expires, nil
 }
 
-// CancelCode closes the pairing window (idempotent).
+// CancelCode closes the pairing window (idempotent). Sessions still
+// running under the cancelled code are invalidated via the epoch bump.
 func (m *Manager) CancelCode() error {
-	m.mu.Lock()
+	m.codeMu.Lock()
+	defer m.codeMu.Unlock()
+	m.epoch++
 	m.key = nil
-	m.mu.Unlock()
 	if err := m.st.JournalDelete(codeJournalKey); err != nil {
 		return fmt.Errorf("pairing: cancel code: %w", err)
 	}
@@ -184,10 +219,14 @@ func (m *Manager) CancelCode() error {
 // an expired attempt receives the Flow C PairReject{pairing_expired}
 // instead of a silent close.
 func (m *Manager) PairingOpen() bool {
+	m.codeMu.Lock()
+	defer m.codeMu.Unlock()
 	_, found, err := m.loadRecord()
 	return err == nil && found
 }
 
+// storeRecord persists rec. The caller must hold codeMu: the record
+// is only ever mutated as part of a serialized lifecycle step.
 func (m *Manager) storeRecord(rec codeRecord) error {
 	data, err := json.Marshal(rec)
 	if err != nil {
@@ -199,6 +238,8 @@ func (m *Manager) storeRecord(rec codeRecord) error {
 	return nil
 }
 
+// loadRecord reads the current code record. The caller must hold
+// codeMu (see storeRecord).
 func (m *Manager) loadRecord() (codeRecord, bool, error) {
 	data, found, err := m.st.JournalGet(codeJournalKey)
 	if err != nil {
@@ -214,20 +255,35 @@ func (m *Manager) loadRecord() (codeRecord, bool, error) {
 	return rec, true, nil
 }
 
-// deleteRecord removes the code record and the in-memory key.
-func (m *Manager) deleteRecord() {
-	m.mu.Lock()
+// invalidateRecordLocked removes the code record and the in-memory
+// key and bumps the epoch, killing every session still running under
+// this code generation. The caller must hold codeMu.
+func (m *Manager) invalidateRecordLocked() {
+	m.epoch++
 	m.key = nil
-	m.mu.Unlock()
 	_ = m.st.JournalDelete(codeJournalKey)
 }
 
-// currentKey returns the in-memory verification key of the active
-// code, or nil if this process did not create it (e.g. after restart).
-func (m *Manager) currentKey() []byte {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+// invalidateRecord is invalidateRecordLocked for callers that do not
+// already hold codeMu.
+func (m *Manager) invalidateRecord() {
+	m.codeMu.Lock()
+	defer m.codeMu.Unlock()
+	m.invalidateRecordLocked()
+}
+
+// currentKeyLocked returns the in-memory verification key of the
+// active code, or nil if this process did not create it (e.g. after
+// restart). The caller must hold codeMu.
+func (m *Manager) currentKeyLocked() []byte {
 	return append([]byte(nil), m.key...)
+}
+
+// currentEpoch returns the Manager's live code generation.
+func (m *Manager) currentEpoch() uint64 {
+	m.codeMu.Lock()
+	defer m.codeMu.Unlock()
+	return m.epoch
 }
 
 // errNoSession is returned by confirm/reject for an unknown or dead

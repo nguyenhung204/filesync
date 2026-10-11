@@ -22,11 +22,13 @@ type pendingState struct {
 	acceptor bool   // true on the side that received PairRequest
 	dialAddr string // initiator: the address that was dialed
 	deadline int64  // UnixNano (Manager clock) when the confirm window ends
+	epoch    uint64 // acceptor only: code generation this session proved under
 
 	mu              sync.Mutex
 	localConfirmed  bool
 	remoteConfirmed bool
 	finalized       bool
+	finalizing      bool
 	done            bool
 }
 
@@ -74,50 +76,54 @@ func (m *Manager) HandleConn(ctx context.Context, c *transport.Conn) {
 		return
 	}
 
+	// Phase 1 (under codeMu): window checks and capture of the code
+	// generation this session runs under. The window is NOT bound
+	// here: since round 2, BoundID binds only when the first proof
+	// is submitted, so a bare PairRequest can no longer lock
+	// legitimate initiators out of the window (griefing fix).
+	m.codeMu.Lock()
 	rec, found, err := m.loadRecord()
 	if err != nil {
+		m.codeMu.Unlock()
 		m.log.Error(ctx, "pairing: load code record failed", logx.Err(err))
 		reject(proto.CodeInternal)
 		return
 	}
 	if !found {
+		m.codeMu.Unlock()
 		reject(proto.CodePairingUnavailable)
 		return
 	}
 	if m.now().UnixNano() > rec.ExpiresAt {
-		m.deleteRecord()
+		m.invalidateRecordLocked()
+		m.codeMu.Unlock()
 		reject(proto.CodePairingExpired)
 		return
 	}
 	if rec.BoundID != "" && rec.BoundID != initiatorID {
 		// The window is bound to another device; do not reveal why.
+		m.codeMu.Unlock()
 		m.log.Debug(ctx, "pairing: request from unbound device refused", logx.String("peer", initiatorID))
 		reject(proto.CodePairingUnavailable)
 		return
 	}
-	key := m.currentKey()
-	if key == nil {
+	if m.currentKeyLocked() == nil {
 		// Record exists but this process never created the code
 		// (restart): the window is unusable, per the D7 fail-safe.
-		m.deleteRecord()
+		m.invalidateRecordLocked()
+		m.codeMu.Unlock()
 		reject(proto.CodePairingUnavailable)
 		return
 	}
-	if rec.BoundID == "" {
-		rec.BoundID = initiatorID
-		if err := m.storeRecord(rec); err != nil {
-			m.log.Error(ctx, "pairing: bind code record failed", logx.Err(err))
-			reject(proto.CodeInternal)
-			return
-		}
-	}
+	epoch := rec.Epoch
+	m.codeMu.Unlock()
 
-	nonceB, err := genNonce(m.rand)
+	nonceB, err := genNonce(lockedRand{m})
 	if err != nil {
 		reject(proto.CodeInternal)
 		return
 	}
-	sessionID, err := genSessionID(m.rand)
+	sessionID, err := genSessionID(lockedRand{m})
 	if err != nil {
 		reject(proto.CodeInternal)
 		return
@@ -139,21 +145,73 @@ func (m *Manager) HandleConn(ctx context.Context, c *transport.Conn) {
 	}
 	nonceA, _ := base64.StdEncoding.DecodeString(proofMsg.Header.Nonce)
 	presented, _ := base64.StdEncoding.DecodeString(proofMsg.Header.Proof)
-	if m.now().UnixNano() > rec.ExpiresAt {
-		m.deleteRecord()
+
+	// Phase 2 (under codeMu): reload → verify → persist as ONE
+	// serialized step. Reloading inside the lock is what makes the
+	// attempts counter global: concurrent sessions can no longer
+	// each increment a stale copy and lose updates (round-1
+	// BLOCKER). The epoch check kills sessions whose code was
+	// replaced or cancelled while they were in flight, and the
+	// first proof submitted (right or wrong) binds the window to
+	// its initiator.
+	m.codeMu.Lock()
+	rec, found, err = m.loadRecord()
+	switch {
+	case err != nil:
+		m.codeMu.Unlock()
+		m.log.Error(ctx, "pairing: reload code record failed", logx.Err(err))
+		reject(proto.CodeInternal)
+		return
+	case !found:
+		m.codeMu.Unlock()
+		reject(proto.CodePairingUnavailable)
+		return
+	case m.now().UnixNano() > rec.ExpiresAt:
+		m.invalidateRecordLocked()
+		m.codeMu.Unlock()
 		reject(proto.CodePairingExpired)
 		return
+	case rec.Epoch != epoch:
+		m.codeMu.Unlock()
+		reject(proto.CodePairingUnavailable)
+		return
+	case rec.BoundID != "" && rec.BoundID != initiatorID:
+		m.codeMu.Unlock()
+		m.log.Debug(ctx, "pairing: proof from unbound device refused", logx.String("peer", initiatorID))
+		reject(proto.CodePairingUnavailable)
+		return
+	}
+	key := m.currentKeyLocked()
+	if key == nil {
+		m.invalidateRecordLocked()
+		m.codeMu.Unlock()
+		reject(proto.CodePairingUnavailable)
+		return
+	}
+	bindNow := rec.BoundID == ""
+	if bindNow {
+		rec.BoundID = initiatorID
 	}
 	if !verifyProof(key, "initiator", nonceB, nonceA, initiatorID, m.id.DeviceID, presented) {
 		rec.Attempts++
 		if rec.Attempts >= MaxAttempts {
-			m.deleteRecord()
+			m.invalidateRecordLocked()
 		} else if err := m.storeRecord(rec); err != nil {
 			m.log.Error(ctx, "pairing: persist attempt failed", logx.Err(err))
 		}
+		m.codeMu.Unlock()
 		reject(proto.CodeBadProof)
 		return
 	}
+	if bindNow {
+		if err := m.storeRecord(rec); err != nil {
+			m.codeMu.Unlock()
+			m.log.Error(ctx, "pairing: bind code record failed", logx.Err(err))
+			reject(proto.CodeInternal)
+			return
+		}
+	}
+	m.codeMu.Unlock()
 	proofB := proofFor(key, "acceptor", nonceB, nonceA, initiatorID, m.id.DeviceID)
 	if err := c.WriteMessage(ctx, proto.Message{Header: proto.Header{
 		Type: proto.TypePairAccept, SessionID: sessionID,
@@ -172,6 +230,7 @@ func (m *Manager) HandleConn(ctx context.Context, c *transport.Conn) {
 		conn:     c,
 		acceptor: true,
 		deadline: m.now().Add(ConfirmTTL).UnixNano(),
+		epoch:    epoch,
 	}
 	m.addPending(st)
 	m.fireProposed(st.pair)
@@ -219,7 +278,7 @@ func (m *Manager) DialPair(ctx context.Context, tm *transport.Manager, addr, cod
 	}
 	sessionID := msg.Header.SessionID
 	nonceB, _ := base64.StdEncoding.DecodeString(msg.Header.Nonce)
-	nonceA, err := genNonce(m.rand)
+	nonceA, err := genNonce(lockedRand{m})
 	if err != nil {
 		return fail(err)
 	}
@@ -305,6 +364,17 @@ func (m *Manager) runSession(st *pendingState) {
 		select {
 		case e := <-ch:
 			if e.err != nil {
+				// A peer that has fully confirmed finalizes and
+				// closes its side immediately. If our own user has
+				// also confirmed, the local finalize triggered by
+				// ConfirmFingerprint may not have run yet — it races
+				// this loop, and dropping first would mark the
+				// session done and silently lose a pairing BOTH
+				// users approved. Give finalization first chance at
+				// the completed handshake; drop only what is still
+				// unfinished afterwards (round-2 flake root cause,
+				// caught by a state dump on a stalled session).
+				m.tryFinalize(st)
 				m.dropPending(st)
 				return
 			}
@@ -328,9 +398,41 @@ func (m *Manager) runSession(st *pendingState) {
 				m.log.Info(ctx, "pairing: peer rejected the pairing", logx.String("peer", st.pair.DeviceID))
 				m.dropPending(st)
 				return
+			default:
+				// D2 discipline holds for the whole life of an
+				// untrusted connection, including the confirm phase:
+				// a non-Pair* message is answered Error{unpaired}
+				// and ends the session; an out-of-phase Pair*
+				// message just ends it (round-2 security fix —
+				// previously both were silently ignored).
+				if !isPairType(e.msg.Header.Type) {
+					_ = st.conn.WriteMessage(ctx, proto.Message{Header: proto.Header{
+						Type: proto.TypeError, Code: proto.CodeUnpaired,
+						Message: "connection is not paired",
+					}})
+				}
+				m.dropPending(st)
+				return
 			}
 		case <-ticker.C:
+			if st.acceptor && !st.isFinalized() && m.currentEpoch() != st.epoch {
+				// The code this session proved under was replaced
+				// or cancelled: the session is invalid (Flow C.3).
+				_ = st.conn.WriteMessage(ctx, proto.Message{Header: proto.Header{
+					Type: proto.TypePairReject, SessionID: st.pair.SessionID,
+					Code: proto.CodePairingUnavailable,
+				}})
+				m.dropPending(st)
+				return
+			}
 			if m.now().UnixNano() > st.deadline && !st.isFinalized() {
+				// Same race as the read-error path: a completed
+				// two-sided confirmation wins over the deadline.
+				m.tryFinalize(st)
+				if st.isFinalized() {
+					m.dropPending(st)
+					return
+				}
 				_ = st.conn.WriteMessage(ctx, proto.Message{Header: proto.Header{
 					Type: proto.TypePairReject, SessionID: st.pair.SessionID,
 					Code: proto.CodeFingerprintRejected,

@@ -85,12 +85,22 @@ func (m *Manager) RejectFingerprint(sessionID string) error {
 // conditions on its own (spec rule 6).
 func (m *Manager) tryFinalize(st *pendingState) {
 	st.mu.Lock()
-	if st.finalized || st.done || !st.localConfirmed || !st.remoteConfirmed {
+	if st.finalized || st.finalizing || st.done || !st.localConfirmed || !st.remoteConfirmed {
 		st.mu.Unlock()
 		return
 	}
-	st.finalized = true
+	st.finalizing = true
 	st.mu.Unlock()
+
+	// An acceptor session whose code window was replaced or cancelled
+	// after its proof must never write trust (epoch invalidation).
+	if st.acceptor && m.currentEpoch() != st.epoch {
+		st.mu.Lock()
+		st.finalizing = false
+		st.mu.Unlock()
+		m.dropPending(st)
+		return
+	}
 
 	peer := store.Peer{
 		DeviceID:        st.pair.DeviceID,
@@ -106,11 +116,21 @@ func (m *Manager) tryFinalize(st *pendingState) {
 	// inbound connection carries an ephemeral port, not a dialable
 	// listen address.
 	if err := m.st.PutPeer(peer); err != nil {
+		// finalized is set only after the store write succeeds
+		// (round-2 fix): on failure the session stays alive and a
+		// repeated ConfirmFingerprint retries the write.
+		st.mu.Lock()
+		st.finalizing = false
+		st.mu.Unlock()
 		m.log.Error(st.conn.Context(), "pairing: store peer failed", logx.String("peer", st.pair.DeviceID), logx.Err(err))
 		return
 	}
+	st.mu.Lock()
+	st.finalized = true
+	st.finalizing = false
+	st.mu.Unlock()
 	if st.acceptor {
-		m.deleteRecord() // the code is one-time: consumed by success
+		m.invalidateRecord() // the code is one-time: consumed by success; also kills sibling sessions on this code
 	}
 	_ = st.conn.WriteMessage(st.conn.Context(), proto.Message{Header: proto.Header{
 		Type: proto.TypePairFinal, SessionID: st.pair.SessionID,
