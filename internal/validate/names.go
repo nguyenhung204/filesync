@@ -12,7 +12,7 @@ import (
 // list rather than a chain of conditionals.
 var reservedNames = func() map[string]struct{} {
 	set := map[string]struct{}{}
-	for _, name := range []string{"CON", "PRN", "AUX", "NUL"} {
+	for _, name := range []string{"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"} {
 		set[name] = struct{}{}
 	}
 	for i := 1; i <= 9; i++ {

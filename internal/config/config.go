@@ -71,12 +71,20 @@ func Default() Config {
 // file returns the defaults with a nil error. A corrupt file or invalid
 // values return a wrapped error and leave the file untouched.
 func Load(configDir string) (Config, error) {
+	if configDir == "" {
+		// An empty dir would make filepath.Join read ./config.json from
+		// the working directory — refuse instead of guessing.
+		return Config{}, fmt.Errorf("config: load: config_dir must not be empty")
+	}
 	cfg := Default()
 	cfg.ConfigDir = configDir
 	path := filepath.Join(configDir, fileName)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if err := cfg.Validate(); err != nil {
+				return cfg, fmt.Errorf("config: load %s: %w", path, err)
+			}
 			return cfg, nil
 		}
 		return cfg, fmt.Errorf("config: read %s: %w", path, err)

@@ -3,6 +3,7 @@ package chunk
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"math/bits"
 )
 
@@ -110,6 +111,13 @@ func (b *Bitmap) UnmarshalBinary(data []byte) error {
 		return fmt.Errorf("chunk: bitmap too short: %d bytes", len(data))
 	}
 	n64 := binary.BigEndian.Uint64(data[:8])
+	// Guard BEFORE the length arithmetic: for n64 near 2^64 the (n64+7)
+	// below would wrap around and let a hostile header pass the length
+	// check, and int(n64) would go negative. Anything beyond the
+	// platform int range is rejected outright.
+	if n64 > uint64(math.MaxInt) {
+		return fmt.Errorf("chunk: bitmap length %d exceeds platform int range", n64)
+	}
 	wantLen := 8 + (n64+7)/8
 	if uint64(len(data)) != wantLen {
 		return fmt.Errorf("chunk: bitmap length mismatch: n=%d needs %d bytes, got %d", n64, wantLen, len(data))

@@ -126,11 +126,16 @@ func (v VersionVector) Clone() VersionVector {
 	return out
 }
 
-// Canonical returns a clone with all zero elements dropped.
+// Canonical returns a clone with all zero elements dropped, along with
+// any empty-device element: an empty string is never a valid device ID
+// (Increment("") is a no-op), so one can only appear in a hand-written
+// map literal. Dropping it here — the choke point MarshalJSON goes
+// through — keeps marshal/unmarshal symmetric, while UnmarshalJSON still
+// rejects an empty key arriving from outside as corrupt data.
 func (v VersionVector) Canonical() VersionVector {
 	out := New()
 	for device, n := range v {
-		if n != 0 {
+		if device != "" && n != 0 {
 			out[device] = n
 		}
 	}

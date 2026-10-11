@@ -91,28 +91,36 @@ func ValidateRelPath(p string, maxLen int) (string, error) {
 	if maxLen <= 0 {
 		maxLen = DefaultMaxLen
 	}
+	// orig is kept untouched: Error.Path always reports the caller's
+	// original string, never the NFC-normalized working copy.
+	orig := p
 	// 1. empty
 	if p == "" {
-		return "", newError(CodeEmpty, p, "path is empty")
+		return "", newError(CodeEmpty, orig, "path is empty")
 	}
-	// 2. NUL and control characters (checked on the raw input)
+	// 2. invalid UTF-8 (checked on the raw input, before NFC can mangle
+	// or replace the offending bytes)
+	if !utf8.ValidString(p) {
+		return "", newError(CodeForbiddenChar, orig, "path is not valid UTF-8")
+	}
+	// 3. NUL and control characters (checked on the raw input)
 	if ctrl, isNUL := hasControl(p); ctrl {
 		if isNUL {
-			return "", newError(CodeNUL, p, "path contains a NUL byte")
+			return "", newError(CodeNUL, orig, "path contains a NUL byte")
 		}
-		return "", newError(CodeForbiddenChar, p, "path contains a control character")
+		return "", newError(CodeForbiddenChar, orig, "path contains a control character")
 	}
-	// 3. Unicode NFC normalization (stdlib has no NFC; see spec ADR note)
+	// 4. Unicode NFC normalization (stdlib has no NFC; see spec ADR note)
 	p = norm.NFC.String(p)
-	// 4. absolute paths: leading slash/backslash, drive letter, UNC
+	// 5. absolute paths: leading slash/backslash, drive letter, UNC
 	if strings.HasPrefix(p, "/") || strings.HasPrefix(p, `\`) || isDrivePrefix(p) {
-		return "", newError(CodeAbsolute, p, "path is absolute")
+		return "", newError(CodeAbsolute, orig, "path is absolute")
 	}
-	// 5. backslash anywhere else: protocol paths use '/' only
+	// 6. backslash anywhere else: protocol paths use '/' only
 	if strings.Contains(p, `\`) {
-		return "", newError(CodeForbiddenChar, p, `path contains '\'`)
+		return "", newError(CodeForbiddenChar, orig, `path contains '\'`)
 	}
-	// 6. segment structure; "." alone denotes the sync root
+	// 7. segment structure; "." alone denotes the sync root
 	if p == "." {
 		return ".", nil
 	}
@@ -120,31 +128,39 @@ func ValidateRelPath(p string, maxLen int) (string, error) {
 	for _, seg := range segments {
 		switch {
 		case seg == "":
-			return "", newError(CodeEmptySegment, p, "path contains an empty segment")
+			return "", newError(CodeEmptySegment, orig, "path contains an empty segment")
 		case seg == "..":
-			return "", newError(CodeTraversal, p, "path contains a '..' segment")
+			return "", newError(CodeTraversal, orig, "path contains a '..' segment")
 		case seg == ".":
-			return "", newError(CodeDotSegment, p, "path contains a '.' segment")
+			return "", newError(CodeDotSegment, orig, "path contains a '.' segment")
 		}
 	}
-	// 7. per-segment checks
+	// 8. per-segment checks
 	for _, seg := range segments {
 		if err := checkSegment(seg); err != nil {
 			ve := err.(*Error)
-			ve.Path = p
+			ve.Path = orig
 			return "", ve
 		}
 	}
-	// 8. total length in runes, separators included
+	// 9. total length in runes, separators included
 	if utf8.RuneCountInString(p) > maxLen {
-		return "", newError(CodeTooLong, p, fmt.Sprintf("path exceeds %d runes", maxLen))
+		return "", newError(CodeTooLong, orig, fmt.Sprintf("path exceeds %d runes", maxLen))
 	}
 	return p, nil
 }
 
-// ValidateSegment validates a single path component (no '/').
+// ValidateSegment validates a single path component (no '/'). The name is
+// NFC-normalized before the per-segment checks (so the 255-byte limit is
+// measured on the NFC form, exactly as in ValidateRelPath), but Error.Path
+// always reports the caller's original string.
 func ValidateSegment(name string) error {
-	if err := checkSegment(name); err != nil {
+	// Invalid UTF-8 is rejected on the raw input first: NFC normalization
+	// would silently replace the offending bytes with U+FFFD.
+	if name != "" && !utf8.ValidString(name) {
+		return newError(CodeForbiddenChar, name, "name is not valid UTF-8")
+	}
+	if err := checkSegment(norm.NFC.String(name)); err != nil {
 		ve := err.(*Error)
 		ve.Path = name
 		return ve
@@ -152,12 +168,18 @@ func ValidateSegment(name string) error {
 	return nil
 }
 
-// checkSegment implements the checks for one segment: empty, NUL/control,
-// separators, Windows-forbidden chars, trailing dot/space, reserved names,
-// and the 255-byte segment limit.
+// checkSegment implements the checks for one segment: empty, invalid
+// UTF-8, NUL/control, separators, Windows-forbidden chars, trailing
+// dot/space, reserved names, and the 255-byte segment limit. Callers pass
+// NFC-normalized segments; the UTF-8 check here is defense-in-depth for
+// direct ValidateSegment callers (ValidateRelPath already rejected
+// invalid UTF-8 for the whole path).
 func checkSegment(seg string) error {
 	if seg == "" {
 		return newError(CodeEmpty, seg, "name is empty")
+	}
+	if !utf8.ValidString(seg) {
+		return newError(CodeForbiddenChar, seg, "name is not valid UTF-8")
 	}
 	if ctrl, isNUL := hasControl(seg); ctrl {
 		if isNUL {
