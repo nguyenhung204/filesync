@@ -76,6 +76,10 @@ parsed:
 		return cmdPause(e, cmdArgs, false)
 	case "conflicts":
 		return cmdConflicts(e, cmdArgs)
+	case "history":
+		return cmdHistory(e, cmdArgs)
+	case "restore":
+		return cmdRestore(e, cmdArgs)
 	case "version":
 		fmt.Fprintf(e.stdout, "filesync %s\n", Version)
 		return 0
@@ -106,6 +110,10 @@ Commands:
   conflicts            list conflict copies
   conflicts resolve <path> --keep mine|theirs [--conflict <path>]
                        resolve a conflict (loser lands in trash/versions)
+  history <path>       list archived versions of a file (newest first)
+  restore <path> [--version <name>]
+                       restore an archived version (default: newest);
+                       the replaced content is archived first (undoable)
   version              print version
 `)
 }
