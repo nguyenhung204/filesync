@@ -7,9 +7,12 @@
 const $ = (id) => document.getElementById(id);
 
 function esc(s) {
+  // Thoát đủ 5 ký tự: dữ liệu từ xa (tên peer, đường dẫn file) cũng
+  // được nội suy vào thuộc tính nháy đơn (data-name='...' v.v.) nên
+  // thiếu ' là vỡ thuộc tính — lỗ hổng XSS round 1 job 006.
   return String(s == null ? "" : s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
 async function api(path, opts) {
