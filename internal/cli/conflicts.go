@@ -8,45 +8,14 @@ import (
 	"filesync/internal/history"
 	"filesync/internal/identity"
 	"filesync/internal/logx"
-	"filesync/internal/store"
 	fsync "filesync/internal/sync"
 	"os"
 )
 
-type conflictInfo struct {
-	Original     string `json:"original"`
-	Conflict     string `json:"conflict"`
-	LoserDevice  string `json:"loser_device"`
-	SizeOriginal int64  `json:"size_original"`
-	SizeConflict int64  `json:"size_conflict"`
-}
-
-// Conflict paths are parsed by sync.ParseConflictPath — the single
-// implementation of the D3 naming rule, shared with the engine's
-// resolver so the CLI can never drift from it.
-
-func listConflicts(entries []store.Entry) []conflictInfo {
-	byPath := map[string]store.Entry{}
-	for _, e := range entries {
-		byPath[e.Path] = e
-	}
-	var out []conflictInfo
-	for _, e := range entries {
-		if e.Tombstone {
-			continue
-		}
-		orig, loser, ok := fsync.ParseConflictPath(e.Path)
-		if !ok {
-			continue
-		}
-		ci := conflictInfo{Original: orig, Conflict: e.Path, LoserDevice: loser, SizeConflict: e.Size}
-		if oe, found := byPath[orig]; found && !oe.Tombstone {
-			ci.SizeOriginal = oe.Size
-		}
-		out = append(out, ci)
-	}
-	return out
-}
+// Conflict listing lives in sync.ListConflicts (job 006 D9f) — the
+// single implementation shared with the web UI, built on
+// sync.ParseConflictPath (the D3 naming rule) so neither consumer
+// can drift from the engine's resolver.
 
 // cmdConflicts lists conflict copies, or resolves one with the
 // `resolve` subcommand.
@@ -63,10 +32,10 @@ func cmdConflicts(e *env, args []string) int {
 	if err != nil {
 		return e.fail("conflicts: %v", err)
 	}
-	infos := listConflicts(entries)
+	infos := fsync.ListConflicts(entries)
 	if e.json {
 		if infos == nil {
-			infos = []conflictInfo{}
+			infos = []fsync.ConflictInfo{}
 		}
 		raw, _ := json.MarshalIndent(infos, "", "  ")
 		fmt.Fprintln(e.stdout, string(raw))
@@ -135,7 +104,7 @@ func cmdConflictsResolve(e *env, args []string) int {
 		return e.fail("resolve: %v", err)
 	}
 	var copies []string
-	for _, ci := range listConflicts(entries) {
+	for _, ci := range fsync.ListConflicts(entries) {
 		if ci.Original == original {
 			copies = append(copies, ci.Conflict)
 		}

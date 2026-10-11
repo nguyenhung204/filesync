@@ -79,3 +79,44 @@ func IsConflictPath(p string) bool {
 	_, _, ok := ParseConflictPath(p)
 	return ok
 }
+
+// ConflictInfo describes one live conflict copy next to its
+// original: the row the CLI's `conflicts` listing and the web UI's
+// Conflicts tab both render. The JSON shape is a contract shared
+// by `filesync conflicts --json` and GET /api/conflicts (job 006
+// D9f) — do not rename fields.
+type ConflictInfo struct {
+	Original     string `json:"original"`
+	Conflict     string `json:"conflict"`
+	LoserDevice  string `json:"loser_device"`
+	SizeOriginal int64  `json:"size_original"`
+	SizeConflict int64  `json:"size_conflict"`
+}
+
+// ListConflicts derives every live conflict copy in entries: a
+// live entry whose path parses as a conflict copy (ParseConflictPath)
+// paired with the size of its live original (0 when the original is
+// missing or tombstoned). This is the single implementation shared
+// by the CLI and the web UI (moved here from cli in job 006).
+func ListConflicts(entries []store.Entry) []ConflictInfo {
+	byPath := map[string]store.Entry{}
+	for _, e := range entries {
+		byPath[e.Path] = e
+	}
+	var out []ConflictInfo
+	for _, e := range entries {
+		if e.Tombstone {
+			continue
+		}
+		orig, loser, ok := ParseConflictPath(e.Path)
+		if !ok {
+			continue
+		}
+		ci := ConflictInfo{Original: orig, Conflict: e.Path, LoserDevice: loser, SizeConflict: e.Size}
+		if oe, found := byPath[orig]; found && !oe.Tombstone {
+			ci.SizeOriginal = oe.Size
+		}
+		out = append(out, ci)
+	}
+	return out
+}
