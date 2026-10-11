@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -118,13 +119,38 @@ func (w *Watcher) Events() <-chan WatchEvent { return w.events }
 // Rescan runs a full scan — the caller's response to WatchRescan.
 func (w *Watcher) Rescan() (ScanResult, error) { return w.scanner.Scan() }
 
+// metaName is FileSync's metadata directory inside the root. The
+// watcher never registers or reports anything inside a .filesync tree,
+// at any depth: version history and trash churn is FileSync's own
+// bookkeeping, not user content (reporting it would make the daemon
+// react to its own writes).
+const metaName = ".filesync"
+
+// inMetaTree reports whether a slash-separated root-relative path is
+// the metadata tree or lives anywhere underneath one.
+func inMetaTree(rel string) bool {
+	for _, part := range strings.Split(rel, "/") {
+		if part == metaName {
+			return true
+		}
+	}
+	return false
+}
+
 func (w *Watcher) addRecursive(root string) error {
+	// Refuse to register anything for a tree that is (or sits inside)
+	// the metadata tree — this also covers a .filesync directory that
+	// appears only after the watcher started and arrives here through
+	// its Create event.
+	if rel, err := filepath.Rel(w.root, root); err == nil && rel != "." && inMetaTree(filepath.ToSlash(rel)) {
+		return nil
+	}
 	return filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		if d.IsDir() {
-			if d.Name() == ".filesync" && p != root {
+			if d.Name() == metaName && p != root {
 				return filepath.SkipDir
 			}
 			if err := w.fsw.Add(p); err != nil {
@@ -199,17 +225,25 @@ func (w *Watcher) handleFsEvent(ev fsnotify.Event) {
 	if ev.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Remove|fsnotify.Rename) == 0 {
 		return
 	}
+	rel, err := filepath.Rel(w.root, ev.Name)
+	if err != nil || rel == "." {
+		return
+	}
+	relSlash := filepath.ToSlash(rel)
+	// The metadata tree is filtered HERE as well as at registration
+	// time, including when it appears after the watcher started: its
+	// events are neither registered nor reported (addRecursive applies
+	// the same filter as a second line of defense).
+	if inMetaTree(relSlash) {
+		return
+	}
 	if ev.Op&fsnotify.Create != 0 {
 		if info, err := os.Stat(ev.Name); err == nil && info.IsDir() {
 			// New directory: watch it and everything already inside.
 			_ = w.addRecursive(ev.Name)
 		}
 	}
-	rel, err := filepath.Rel(w.root, ev.Name)
-	if err != nil || rel == "." {
-		return
-	}
-	w.queueChanged(filepath.ToSlash(rel))
+	w.queueChanged(relSlash)
 }
 
 // queueChanged records a changed path and (re)schedules the debounce
@@ -259,8 +293,12 @@ func (w *Watcher) signalOverflow() {
 	w.emitRescan(true)
 }
 
-// emitRescan emits a WatchRescan unless one was emitted too recently
-// (throttle applies to both overflow and periodic rescans).
+// emitRescan emits a WatchRescan. The throttle applies ONLY to
+// overflow-driven rescans (throttled == true): at most one per
+// RescanInterval, further overflows just set rescanQueued. Periodic
+// safety-net rescans (throttled == false) are NEVER throttled — they
+// are the fallback that heals dropped events — but they still update
+// lastRescan, the timestamp the overflow throttle measures against.
 func (w *Watcher) emitRescan(throttled bool) {
 	w.mu.Lock()
 	interval := w.opts.RescanInterval

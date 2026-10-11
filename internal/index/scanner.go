@@ -131,6 +131,7 @@ type candidate struct {
 	size    int64
 	mtimeNs int64
 	mode    fs.FileMode
+	info    fs.FileInfo // Lstat info captured at walk time (identity anchor)
 }
 
 // Scan walks the tree and diff against the stored snapshot. See the
@@ -165,6 +166,10 @@ func (s *Scanner) Scan() (ScanResult, error) {
 	entries := []FileEntry{}
 	current := make(map[string]FileEntry, len(cands))
 	for _, c := range cands {
+		if sk, bad := s.verifyCandidate(c); bad {
+			skipped = append(skipped, sk)
+			continue
+		}
 		e, err := s.buildEntry(c, snapshot)
 		if err != nil {
 			skipped = append(skipped, Skip{Path: c.rel, Reason: "hash_error", Err: err})
@@ -176,6 +181,29 @@ func (s *Scanner) Scan() (ScanResult, error) {
 	changes := diffSnapshots(snapshot, current)
 	sortSkips(skipped)
 	return ScanResult{Entries: entries, Changes: changes, Skipped: skipped}, nil
+}
+
+// verifyCandidate re-Lstats a candidate immediately before it is used
+// (TOCTOU guard): the walk classified the path earlier, and a local
+// actor able to write into the root could have swapped the regular file
+// for a symlink to a file outside the root in between — hashing then
+// would leak the outside file's size and chunk hashes into the index,
+// and the sync engine would ship its content to paired peers. The file
+// must still be a genuine regular file, the same file (device+inode via
+// os.SameFile), with the size and mtime captured at walk time; anything
+// else is skipped safely instead of being opened.
+func (s *Scanner) verifyCandidate(c candidate) (Skip, bool) {
+	info, err := os.Lstat(c.abs)
+	if err != nil {
+		return Skip{Path: c.rel, Reason: "stat_error", Err: err}, true
+	}
+	if info.Mode()&fs.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return Skip{Path: c.rel, Reason: "symlink", Err: fmt.Errorf("path became a symlink or non-regular file after the walk")}, true
+	}
+	if c.info != nil && (info.Size() != c.size || info.ModTime().UnixNano() != c.mtimeNs || !os.SameFile(c.info, info)) {
+		return Skip{Path: c.rel, Reason: "unstable", Err: safefile.ErrNotStable}, true
+	}
+	return Skip{}, false
 }
 
 // buildEntry reuses stored chunks when path+size+mtime all match the
@@ -335,7 +363,7 @@ func (s *Scanner) walk() ([]candidate, []Skip) {
 		cands = append(cands, candidate{
 			rel: rel, abs: p,
 			size: info.Size(), mtimeNs: info.ModTime().UnixNano(),
-			mode: info.Mode(),
+			mode: info.Mode(), info: info,
 		})
 		return nil
 	})
@@ -404,15 +432,10 @@ func isASCII(s string) bool {
 }
 
 func withinRoot(root, target string) bool {
-	rootAbs, err := filepath.Abs(root)
-	if err != nil {
-		return false
-	}
-	tAbs, err := filepath.Abs(target)
-	if err != nil {
-		return false
-	}
-	return tAbs == rootAbs || strings.HasPrefix(tAbs, rootAbs+string(filepath.Separator))
+	// Shared symlink-aware containment check (internal/safefile): both
+	// sides are resolved before comparing, so a root reached through a
+	// symlink does not produce false escapes.
+	return safefile.PathWithinRoot(root, target)
 }
 
 // filterStable performs the second stat pass after one interval for the
