@@ -60,6 +60,8 @@ type Daemon struct {
 	id            *identity.Identity
 	st            *store.Store
 	eng           *fsync.Engine
+	hist          *history.Manager // the same manager the engine uses (web UI history/restore, job 006 D9e)
+	uiAddr        string           // web UI listen address once bound, "" otherwise
 	tm            *transport.Manager
 	pm            *pairing.Manager
 	state         string // "", "running", "paused", "stopped"
@@ -257,6 +259,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	d.mu.Lock()
 	d.eng = eng
+	d.hist = hist
 	d.tm = tm
 	d.pm = pm
 	d.initialScanMs = initialMs
@@ -311,6 +314,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go func() { defer wg.Done(); d.reconcileLoop(rctx) }()
 	go func() { defer wg.Done(); d.statusLoop(rctx) }()
 	go func() { defer wg.Done(); d.mailboxLoop(rctx) }()
+	d.startWebUI(rctx, &wg)
 	d.writeStatusTick() // first status as early as possible
 
 	var runErr error
