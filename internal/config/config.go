@@ -28,6 +28,12 @@ type Config struct {
 	VersionHistoryKeep       int    `json:"version_history_keep"`
 	VersionHistoryQuotaBytes int64  `json:"version_history_quota_bytes"` // 0 = unlimited
 	MaxPathLength            int    `json:"max_path_length"`
+	// RescanIntervalSeconds is the periodic full-rescan interval the
+	// daemon hands to the watcher (job 004 spec D5: the number is 30s
+	// everywhere — code, config default and README). Additive field:
+	// config files written before it existed load fine; 0 means "use
+	// the default of 30" when the daemon reads it.
+	RescanIntervalSeconds int `json:"rescan_interval_seconds"`
 }
 
 func defaultConfigDir() string {
@@ -63,6 +69,7 @@ func Default() Config {
 		VersionHistoryKeep:       5,
 		VersionHistoryQuotaBytes: 1 << 30,
 		MaxPathLength:            DefaultMaxPathLength,
+		RescanIntervalSeconds:    30,
 	}
 }
 
@@ -129,6 +136,9 @@ func (c Config) Validate() error {
 	}
 	if c.MaxPathLength < 16 || c.MaxPathLength > 4096 {
 		return fmt.Errorf("config: max_path_length %d out of range 16-4096", c.MaxPathLength)
+	}
+	if c.RescanIntervalSeconds < 0 {
+		return fmt.Errorf("config: rescan_interval_seconds %d must be >= 0", c.RescanIntervalSeconds)
 	}
 	return nil
 }
