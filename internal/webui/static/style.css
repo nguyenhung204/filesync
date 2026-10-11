@@ -1,0 +1,23 @@
+:root { color-scheme: light dark; }
+body { font-family: system-ui, sans-serif; margin: 1rem auto; max-width: 60rem; padding: 0 1rem; }
+header { display: flex; align-items: center; gap: 1rem; }
+h1 { font-size: 1.4rem; margin: 0.3rem 0; }
+h2 { font-size: 1.05rem; margin-top: 1.4rem; }
+.badge { border: 1px solid #888; border-radius: 1rem; padding: 0.1rem 0.6rem; font-size: 0.85rem; }
+nav { display: flex; gap: 0.4rem; flex-wrap: wrap; margin: 0.8rem 0; }
+nav .tab { padding: 0.4rem 0.8rem; border: 1px solid #888; background: transparent; border-radius: 0.4rem; cursor: pointer; }
+nav .tab.active { background: #2b6cb0; color: #fff; border-color: #2b6cb0; }
+.panel { display: none; border-top: 1px solid #8884; padding-top: 0.6rem; }
+.panel.active { display: block; }
+.row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin: 0.6rem 0; }
+table { border-collapse: collapse; width: 100%; }
+th, td { border-bottom: 1px solid #8884; text-align: left; padding: 0.35rem 0.5rem; vertical-align: top; }
+code, .mono { font-family: ui-monospace, monospace; font-size: 0.9em; overflow-wrap: anywhere; }
+.warn { border: 1px solid #b7791f; background: #b7791f22; border-radius: 0.4rem; padding: 0.6rem; margin: 0.6rem 0; }
+.error { color: #c53030; }
+.hint { color: #888; font-size: 0.9rem; }
+.hidden { display: none; }
+button { cursor: pointer; padding: 0.35rem 0.7rem; }
+input { padding: 0.35rem 0.5rem; }
+#toast { position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%); background: #222; color: #fff; padding: 0.6rem 1rem; border-radius: 0.4rem; max-width: 90vw; }
+.bigcode { font-size: 1.6rem; letter-spacing: 0.3rem; font-family: ui-monospace, monospace; }

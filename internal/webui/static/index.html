@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FileSync — Trang quản lý</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>FileSync</h1>
+  <span id="conn-state" class="badge">đang tải…</span>
+</header>
+
+<nav>
+  <button data-tab="overview" class="tab active">Tổng quan</button>
+  <button data-tab="peers" class="tab">Máy đã pair</button>
+  <button data-tab="pairing" class="tab">Ghép đôi</button>
+  <button data-tab="conflicts" class="tab">Conflicts <span id="conflict-count"></span></button>
+  <button data-tab="history" class="tab">Lịch sử</button>
+</nav>
+
+<main>
+<section id="tab-overview" class="panel active">
+  <div id="overview-body">Đang tải trạng thái…</div>
+  <div class="row">
+    <button id="btn-pause">Tạm dừng đồng bộ</button>
+    <button id="btn-resume">Tiếp tục đồng bộ</button>
+  </div>
+  <div id="skip-warning" class="warn hidden"></div>
+  <div id="recent-errors"></div>
+</section>
+
+<section id="tab-peers" class="panel">
+  <div id="peers-body">Đang tải…</div>
+</section>
+
+<section id="tab-pairing" class="panel">
+  <h2>Tạo mã để máy khác ghép với máy này</h2>
+  <div class="row">
+    <button id="btn-code">Tạo mã ghép đôi</button>
+    <span id="code-display"></span>
+  </div>
+  <p class="hint">Mã có hiệu lực 5 phút. Tạo mã mới sẽ thay thế hoàn toàn mã cũ.</p>
+
+  <h2>Ghép với máy khác</h2>
+  <div class="row">
+    <input id="dial-addr" type="text" placeholder="Địa chỉ máy kia, ví dụ 192.168.1.20:22000" size="34">
+    <input id="dial-code" type="text" placeholder="Mã 6 số" size="10" maxlength="7">
+    <button id="btn-dial">Ghép đôi</button>
+  </div>
+  <div id="dial-msg"></div>
+
+  <h2>Yêu cầu đang chờ duyệt</h2>
+  <div id="pending-body">Không có yêu cầu nào.</div>
+  <p class="hint">Ghép đôi chỉ hoàn tất khi <strong>cả hai máy đều duyệt</strong>.
+  Chỉ duyệt khi fingerprint hiện ở đây khớp đúng với fingerprint máy kia tự hiển thị — đây là bước chống ghép nhầm/nghe lén, không thể bỏ qua.</p>
+</section>
+
+<section id="tab-conflicts" class="panel">
+  <div id="conflicts-body">Đang tải…</div>
+</section>
+
+<section id="tab-history" class="panel">
+  <div class="row">
+    <input id="history-path" type="text" placeholder="Đường dẫn file, ví dụ report.txt" size="40" list="files-list">
+    <datalist id="files-list"></datalist>
+    <button id="btn-history">Xem lịch sử</button>
+  </div>
+  <div id="history-body"></div>
+</section>
+</main>
+
+<div id="toast" class="hidden"></div>
+<script src="app.js"></script>
+</body>
+</html>
