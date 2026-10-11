@@ -1,0 +1,6 @@
+factory/jobs/
+*.test
+/filesync
+/filesync.exe
+dist/
+*.log
