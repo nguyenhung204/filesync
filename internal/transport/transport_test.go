@@ -166,10 +166,10 @@ func TestHelloVersionMismatch(t *testing.T) {
 	}
 	ctx := context.Background()
 	err = conn.WriteMessage(ctx, proto.Message{Header: proto.Header{
-		Type: proto.TypeHello, Protocol: 2, DeviceID: a.id.DeviceID,
+		Type: proto.TypeHello, Protocol: 1, DeviceID: a.id.DeviceID,
 	}})
 	if err != nil {
-		t.Fatalf("write hello v2: %v", err)
+		t.Fatalf("write hello v1: %v", err)
 	}
 	msg, err := conn.ReadMessage(ctx)
 	if err != nil {
@@ -198,8 +198,10 @@ func TestCertIDMismatchRejected(t *testing.T) {
 	defer conn.Close()
 	ctx := context.Background()
 	// Hello claims b's own ID while presenting a's certificate.
+	// Protocol must be the current version: the version check runs
+	// before the identity check and would mask the mismatch.
 	err = conn.WriteMessage(ctx, proto.Message{Header: proto.Header{
-		Type: proto.TypeHello, Protocol: 1, DeviceID: b.id.DeviceID,
+		Type: proto.TypeHello, Protocol: proto.ProtocolVersion, DeviceID: b.id.DeviceID,
 	}})
 	if err != nil {
 		t.Fatalf("write hello: %v", err)
