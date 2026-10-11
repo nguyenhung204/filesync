@@ -1,17 +1,17 @@
-// Command filesync is the single binary: daemon + CLI for FileSync.
+// Command filesync is the FileSync daemon + CLI (phase 1: LAN
+// two-way file sync without a cloud intermediary).
 package main
 
 import (
-	"fmt"
 	"os"
+
+	"filesync/internal/cli"
 )
 
-var version = "0.1.0-dev"
+// version is overridable at build time via -ldflags -X main.version.
+var version = "0.1.0"
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "version" {
-		fmt.Println("filesync", version)
-		return
-	}
-	fmt.Println("filesync: not implemented yet — see README.md")
+	cli.Version = version
+	os.Exit(cli.Run(os.Args[1:], os.Stdout, os.Stderr))
 }

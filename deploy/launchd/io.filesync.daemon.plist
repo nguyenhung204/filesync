@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- FileSync launchd agent (per-user).
+     Before installing, replace YOURNAME with your short user name
+     (launchd does not expand ~ in paths). Install with:
+       mkdir -p ~/Library/Logs/filesync
+       cp deploy/launchd/io.filesync.daemon.plist ~/Library/LaunchAgents/
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.filesync.daemon.plist
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>io.filesync.daemon</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/filesync</string>
+		<string>serve</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/Users/YOURNAME/Library/Logs/filesync/filesync.out.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/YOURNAME/Library/Logs/filesync/filesync.err.log</string>
+</dict>
+</plist>

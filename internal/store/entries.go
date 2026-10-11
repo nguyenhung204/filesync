@@ -84,31 +84,76 @@ func scanEntry(scanner interface{ Scan(...any) error }) (Entry, error) {
 	return decodeEntry(e.Path, e.Size, e.MtimeNs, uint32(mode64), chunksBlob, vectorText, tombstoneInt, e.TombstoneTs, e.UpdatedBy)
 }
 
-// UpsertEntry inserts or fully replaces the row for e.Path in one
-// transaction. Nil Chunks/Vector are stored as empty.
-func (s *Store) UpsertEntry(e Entry) error {
-	if e.Path == "" {
-		return errors.New("store: upsert entry: empty path")
-	}
-	if e.Size < 0 {
-		return fmt.Errorf("store: upsert entry %q: negative size %d", e.Path, e.Size)
-	}
-	chunksBlob, vectorText, err := encodeEntry(e)
-	if err != nil {
-		return fmt.Errorf("store: upsert entry: %w", err)
-	}
-	_, err = s.db.Exec(`
+const upsertEntrySQL = `
 INSERT INTO files (path, size, mtime_ns, mode, chunks, vector, tombstone, tombstone_ts, updated_by)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(path) DO UPDATE SET
     size = excluded.size, mtime_ns = excluded.mtime_ns, mode = excluded.mode,
     chunks = excluded.chunks, vector = excluded.vector,
     tombstone = excluded.tombstone, tombstone_ts = excluded.tombstone_ts,
-    updated_by = excluded.updated_by`,
-		e.Path, e.Size, e.MtimeNs, e.Mode, chunksBlob, vectorText,
-		boolToInt(e.Tombstone), e.TombstoneTs, e.UpdatedBy)
+    updated_by = excluded.updated_by`
+
+func entryExecArgs(e Entry) ([]any, error) {
+	if e.Path == "" {
+		return nil, errors.New("store: upsert entry: empty path")
+	}
+	if e.Size < 0 {
+		return nil, fmt.Errorf("store: upsert entry %q: negative size %d", e.Path, e.Size)
+	}
+	chunksBlob, vectorText, err := encodeEntry(e)
 	if err != nil {
+		return nil, fmt.Errorf("store: upsert entry: %w", err)
+	}
+	return []any{
+		e.Path, e.Size, e.MtimeNs, e.Mode, chunksBlob, vectorText,
+		boolToInt(e.Tombstone), e.TombstoneTs, e.UpdatedBy,
+	}, nil
+}
+
+// UpsertEntry inserts or fully replaces the row for e.Path in one
+// transaction. Nil Chunks/Vector are stored as empty.
+func (s *Store) UpsertEntry(e Entry) error {
+	args, err := entryExecArgs(e)
+	if err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(upsertEntrySQL, args...); err != nil {
 		return fmt.Errorf("store: upsert entry %q: %w", e.Path, err)
+	}
+	return nil
+}
+
+// UpsertEntries writes many entries in ONE transaction (one fsync
+// total instead of one per entry). The sync engine's CommitScan
+// produces up to one entry per file in a tree; per-entry
+// transactions made the initial commit of a 10k-file tree cost
+// 10k fsyncs (≈200s on a disk with 20ms fsync latency, measured).
+// Atomicity is a bonus: a scan commit lands whole or not at all.
+func (s *Store) UpsertEntries(entries []Entry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: batch upsert: begin: %w", err)
+	}
+	defer tx.Rollback()
+	stmt, err := tx.Prepare(upsertEntrySQL)
+	if err != nil {
+		return fmt.Errorf("store: batch upsert: prepare: %w", err)
+	}
+	defer stmt.Close()
+	for _, e := range entries {
+		args, err := entryExecArgs(e)
+		if err != nil {
+			return err
+		}
+		if _, err := stmt.Exec(args...); err != nil {
+			return fmt.Errorf("store: batch upsert entry %q: %w", e.Path, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: batch upsert: commit: %w", err)
 	}
 	return nil
 }
