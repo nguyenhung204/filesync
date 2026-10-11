@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -143,7 +144,8 @@ func TestStatusAuth(t *testing.T) {
 
 func TestRootTokenBootstrap(t *testing.T) {
 	s, token := newTestServer(t, &fakeBackend{})
-	rec := doReq(s, "GET", "/?token="+token, nil, "")
+	bootstrap := "/?" + url.Values{"token": {token}}.Encode()
+	rec := doReq(s, "GET", bootstrap, nil, "")
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("good token at /: got %d, want 303", rec.Code)
 	}
@@ -157,7 +159,8 @@ func TestRootTokenBootstrap(t *testing.T) {
 		t.Fatalf("cookie auth: got %d, want 200", rec2.Code)
 	}
 	// Wrong token at / -> 401 and no cookie issued.
-	rec3 := doReq(s, "GET", "/?token=deadbeef", nil, "")
+	badBootstrap := "/?" + url.Values{"token": {"deadbeef"}}.Encode()
+	rec3 := doReq(s, "GET", badBootstrap, nil, "")
 	if rec3.Code != http.StatusUnauthorized || rec3.Header().Get("Set-Cookie") != "" {
 		t.Fatalf("bad token at /: got %d cookie %q, want 401 + no cookie", rec3.Code, rec3.Header().Get("Set-Cookie"))
 	}

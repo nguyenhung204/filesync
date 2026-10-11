@@ -48,26 +48,30 @@ func TestWebUIConflictsResolve(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	conflictFile := ""
-	waitFor(t, "conflict copy appears on A", 20*time.Second, func() bool {
-		matches, _ := filepath.Glob(filepath.Join(a.cfg.SyncDir, "shared (conflict *.txt"))
-		if len(matches) == 1 {
-			conflictFile = matches[0]
-			return true
+	// Wait for the conflict to fully CONVERGE (both sides report
+	// the same single conflict and hold identical canonical
+	// content) — resolving mid-convergence races the sync rounds
+	// that are still settling the winner.
+	var list []map[string]any
+	var canonicalBefore []byte
+	waitFor(t, "conflict converged on both sides", 25*time.Second, func() bool {
+		la, errA := ua.getList("/api/conflicts")
+		lb, errB := ub.getList("/api/conflicts")
+		if errA != nil || errB != nil || len(la) != 1 || len(lb) != 1 {
+			return false
 		}
-		return false
+		ca, errA := os.ReadFile(filepath.Join(a.cfg.SyncDir, "shared.txt"))
+		cb, errB := os.ReadFile(filepath.Join(b.cfg.SyncDir, "shared.txt"))
+		if errA != nil || errB != nil || string(ca) != string(cb) {
+			return false
+		}
+		list, canonicalBefore = la, ca
+		return true
 	})
-	list, err := ua.getList("/api/conflicts")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(list) != 1 || list[0]["original"] != "shared.txt" {
+	if list[0]["original"] != "shared.txt" {
 		t.Fatalf("conflicts = %v, want exactly one for shared.txt", list)
 	}
-	canonicalBefore, err := os.ReadFile(filepath.Join(a.cfg.SyncDir, "shared.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	conflictPathOnDisk := filepath.Join(a.cfg.SyncDir, filepath.Base(list[0]["conflict"].(string)))
 	if _, err := ua.post("/api/conflicts/resolve", map[string]any{
 		"original": "shared.txt", "conflict": list[0]["conflict"], "keep": "mine",
 	}); err != nil {
@@ -87,7 +91,7 @@ func TestWebUIConflictsResolve(t *testing.T) {
 	if string(canonicalAfter) != string(canonicalBefore) {
 		t.Fatalf("keep=mine changed canonical content: %q -> %q", canonicalBefore, canonicalAfter)
 	}
-	if fileExists(a.cfg.SyncDir, filepath.Base(conflictFile)) {
+	if _, err := os.Stat(conflictPathOnDisk); !os.IsNotExist(err) {
 		t.Fatal("conflict copy still live after resolve")
 	}
 	// The loser survives in the trash (nothing was destroyed).

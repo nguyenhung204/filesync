@@ -16,6 +16,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"filesync/internal/logx"
@@ -124,9 +125,13 @@ type Server struct {
 	opts    Options
 	log     *logx.Logger
 	token   string
-	addr    string // actual listen address once Start succeeded
-	http    *http.Server
-	mux     http.Handler
+	// addr holds the listen address once Start has bound it. It is
+	// written by Start's goroutine and read by Addr() callers on
+	// other goroutines — mu guards it (caught by -race in job 006).
+	mu   sync.RWMutex
+	addr string
+	http *http.Server
+	mux  http.Handler
 }
 
 // New builds a Server. The access token is loaded (or created) by
@@ -147,7 +152,11 @@ func (nopWriter) Write(p []byte) (int, error) { return len(p), nil }
 
 // Addr returns the address the server is listening on, or "" when
 // Start has not succeeded (yet).
-func (s *Server) Addr() string { return s.addr }
+func (s *Server) Addr() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.addr
+}
 
 // Start binds 127.0.0.1:<port> and serves until ctx is cancelled,
 // then shuts down gracefully. A bind failure is returned so the
@@ -162,7 +171,9 @@ func (s *Server) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("webui: listen: %w", err)
 	}
+	s.mu.Lock()
 	s.addr = ln.Addr().String()
+	s.mu.Unlock()
 	s.http = &http.Server{
 		Handler:           s.mux,
 		ReadHeaderTimeout: 5 * time.Second,
