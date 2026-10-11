@@ -128,6 +128,16 @@ func (d *Daemon) dirtyChan() <-chan struct{} {
 // scanCommit runs one full scan + commit; on change it updates the
 // indexed count and wakes all session loops.
 func (d *Daemon) scanCommit(ctx context.Context, scanner *index.Scanner) {
+	// While the engine is actively pulling, the watcher events
+	// are overwhelmingly our OWN finalize writes (already indexed
+	// by the pull path itself). A full rescan per coalesce window
+	// would stat the whole tree and fight the pulls for the
+	// store's single connection. External edits made during a
+	// bulk transfer are still caught: the rescan tick and the
+	// post-pull watcher events both run a scan once pulls drain.
+	if len(d.eng.ActivePulls()) > 0 {
+		return
+	}
 	d.scanMu.Lock()
 	defer d.scanMu.Unlock()
 	res, err := scanner.Scan()

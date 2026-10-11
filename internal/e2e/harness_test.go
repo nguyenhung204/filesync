@@ -41,8 +41,16 @@ func binary(t *testing.T) string {
 			binErr = err
 			return
 		}
-		dir, err := os.MkdirTemp("", "filesync-e2e-bin")
-		if err != nil {
+		// Fixed path on the big disk: a fresh os.MkdirTemp per
+		// run leaked an 18MB binary dir into the small /tmp
+		// tmpfs every suite run.
+		home, herr := os.UserHomeDir()
+		if herr != nil {
+			binErr = herr
+			return
+		}
+		dir := filepath.Join(home, ".filesync-e2e-tmp", "bin")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
 			binErr = err
 			return
 		}
@@ -119,12 +127,29 @@ func freeAddr(t *testing.T) string {
 	return ln.Addr().String()
 }
 
+// baseOverride, when set by a test, replaces the default node-dir
+// root (tests run sequentially, so a package var is safe).
+var baseOverride string
+
+// tmpFreeBytes reports free space on os.TempDir's filesystem.
+func tmpFreeBytes(t *testing.T) uint64 {
+	t.Helper()
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(os.TempDir(), &st); err != nil {
+		return 0
+	}
+	return st.Bavail * uint64(st.Bsize)
+}
+
 // testBase allocates a node dir on the big disk: /tmp is a small
 // tmpfs on this machine (512 MiB) and the resume test moves 1 GiB
 // files around, so t.TempDir() is not an option there.
 func testBase(t *testing.T) string {
 	t.Helper()
-	root := os.Getenv("FILESYNC_E2E_TMP")
+	root := baseOverride
+	if root == "" {
+		root = os.Getenv("FILESYNC_E2E_TMP")
+	}
 	if root == "" {
 		home, err := os.UserHomeDir()
 		if err == nil && home != "" {
