@@ -99,8 +99,12 @@ func evalExisting(abs string) string {
 
 // PathWithinRoot reports whether target — after resolving symlinks on
 // both sides — is the root itself or lives inside it. A target that
-// cannot be resolved is judged lexically. Shared with internal/index,
-// which classifies symlink entries during a scan with it.
+// does not exist yet is judged by resolving its deepest existing
+// ancestor (evalExisting) and re-appending the not-yet-existing
+// remainder, so a symlinked component among the existing ancestors
+// still counts as an escape — never by lexical inspection of the raw
+// path alone. Shared with internal/index, which classifies symlink
+// entries during a scan with it.
 func PathWithinRoot(root, target string) bool {
 	rootAbs, err := filepath.Abs(root)
 	if err != nil {
@@ -116,7 +120,7 @@ func PathWithinRoot(root, target string) bool {
 		if aerr != nil {
 			return false
 		}
-		resolvedTarget = targetAbs
+		resolvedTarget = evalExisting(targetAbs)
 	}
 	return withinDir(resolvedRoot, resolvedTarget)
 }
