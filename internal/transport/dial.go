@@ -6,7 +6,6 @@ import (
 	"crypto/x509"
 	"fmt"
 	"net"
-	"sync/atomic"
 	"time"
 
 	"filesync/internal/identity"
@@ -113,7 +112,8 @@ func (m *Manager) backoffDelay(n int) time.Duration {
 // it only turns off DNS/CA verification, which is meaningless for
 // self-signed certificates. The VerifyPeerCertificate callback still
 // enforces exactly one certificate, parseable, in its validity
-// window, and captures its device ID + fingerprint. The peer is then
+// window; the device ID + fingerprint are then read from the
+// connection state in dialOne. The peer is then
 // authenticated by the pairing HMAC proof plus the user's fingerprint
 // confirmation (pairing package); until both succeed the connection
 // stays untrusted and carries only Pair* messages.
@@ -125,17 +125,12 @@ func (m *Manager) DialPairing(ctx context.Context, addr string, expectedID strin
 		}
 		return c, c.PeerID(), c.Fingerprint(), nil
 	}
-	var captured atomic.Value // []byte (cert DER)
 	cfg := &tls.Config{
 		MinVersion:         tls.VersionTLS13,
 		Certificates:       []tls.Certificate{m.id.TLSKeyPair()},
 		InsecureSkipVerify: true, // see doc comment: verification happens in VerifyPeerCertificate + pairing proof
 		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-			if err := verifyCertShape(rawCerts); err != nil {
-				return err
-			}
-			captured.Store(append([]byte(nil), rawCerts[0]...))
-			return nil
+			return verifyCertShape(rawCerts)
 		},
 	}
 	c, err := m.dialOne(ctx, addr, cfg, "", false)

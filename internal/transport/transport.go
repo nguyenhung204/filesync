@@ -37,16 +37,23 @@ type Handler func(ctx context.Context, c *Conn)
 // pairing.Manager implements it; transport never imports pairing.
 type PairingGate interface{ PairingOpen() bool }
 
-// Options tunes a Manager. Zero values get the documented defaults,
-// except MDNSEnabled: a bool cannot express "default true", so callers
+// Options tunes a Manager. Most zero values get the documented
+// defaults via applyDefaults, with two exceptions: IdleTimeout, where
+// 0 means OFF per spec (DefaultOptions supplies the 120s default),
+// and MDNSEnabled: a bool cannot express "default true", so callers
 // wanting discovery should start from DefaultOptions (job 004 does).
 type Options struct {
 	HandshakeTimeout time.Duration // default 10s
-	IdleTimeout      time.Duration // default 120s; 0 = off
-	MaxConnsPerPeer  int           // default cfg.Parallelism
-	MaxTotalConns    int           // default 64
-	BackoffBase      time.Duration // default 1s
-	BackoffMax       time.Duration // default 60s
+	IdleTimeout      time.Duration // 0 = off; DefaultOptions sets 120s
+	// FirstMessageTimeout bounds how long an UNTRUSTED connection
+	// may take to send its first message after the handshake
+	// (slow-loris guard for the pairing door, round-2 addition).
+	// 0 = default 15s; negative = off.
+	FirstMessageTimeout time.Duration
+	MaxConnsPerPeer     int           // default cfg.Parallelism
+	MaxTotalConns       int           // default 64
+	BackoffBase         time.Duration // default 1s
+	BackoffMax          time.Duration // default 60s
 	// Sleep waits between dial attempts; nil = real timer. Tests inject.
 	Sleep func(ctx context.Context, d time.Duration) error
 	// JitterRand returns [0,1); nil = math/rand/v2. Tests inject.
@@ -62,12 +69,13 @@ type Options struct {
 // including MDNSEnabled = true.
 func DefaultOptions() Options {
 	return Options{
-		HandshakeTimeout: 10 * time.Second,
-		IdleTimeout:      120 * time.Second,
-		MaxTotalConns:    64,
-		BackoffBase:      time.Second,
-		BackoffMax:       60 * time.Second,
-		MDNSEnabled:      true,
+		HandshakeTimeout:    10 * time.Second,
+		IdleTimeout:         120 * time.Second,
+		FirstMessageTimeout: 15 * time.Second,
+		MaxTotalConns:       64,
+		BackoffBase:         time.Second,
+		BackoffMax:          60 * time.Second,
+		MDNSEnabled:         true,
 	}
 }
 
@@ -75,10 +83,17 @@ func (o *Options) applyDefaults(parallelism int) {
 	if o.HandshakeTimeout <= 0 {
 		o.HandshakeTimeout = 10 * time.Second
 	}
+	// IdleTimeout: 0 means OFF (spec) — the 120s default lives in
+	// DefaultOptions, not here (round-2 fix: previously a zero
+	// Options silently re-enabled the timeout and there was no way
+	// to turn it off). Negative values normalize to off.
 	if o.IdleTimeout < 0 {
 		o.IdleTimeout = 0
-	} else if o.IdleTimeout == 0 {
-		o.IdleTimeout = 120 * time.Second
+	}
+	if o.FirstMessageTimeout == 0 {
+		o.FirstMessageTimeout = 15 * time.Second
+	} else if o.FirstMessageTimeout < 0 {
+		o.FirstMessageTimeout = 0
 	}
 	if o.MaxConnsPerPeer <= 0 {
 		if parallelism > 0 {
@@ -311,9 +326,17 @@ func (m *Manager) Serve(ctx context.Context, syncHandler Handler, pairHandler Ha
 	m.boundAddr = ln.Addr().String()
 	m.mu.Unlock()
 	tlsLn := tls.NewListener(ln, m.serverTLSConfig())
+	// The watcher goroutine exits on EITHER ctx cancellation (its
+	// job: close the listener) or Serve returning for any other
+	// reason — previously an early accept error leaked it forever.
+	serveDone := make(chan struct{})
+	defer close(serveDone)
 	go func() {
-		<-ctx.Done()
-		tlsLn.Close()
+		select {
+		case <-ctx.Done():
+			tlsLn.Close()
+		case <-serveDone:
+		}
 	}()
 	defer m.closeAllConns()
 	for {
@@ -369,6 +392,12 @@ func (m *Manager) handle(serveCtx context.Context, tc *tls.Conn, syncHandler, pa
 			// protocol message is read.
 			m.log.Warn(ctx, "transport: untrusted peer rejected, pairing closed", logx.String("peer", peerID))
 			return
+		}
+		if m.opts.FirstMessageTimeout > 0 {
+			// Slow-loris guard: an untrusted peer gets a short
+			// deadline for its first message only; Conn.ReadMessage
+			// relaxes to the IdleTimeout regime after it arrives.
+			c.setFirstMessageDeadline(time.Now().Add(m.opts.FirstMessageTimeout))
 		}
 		pairHandler(ctx, c)
 		return

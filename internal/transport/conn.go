@@ -23,6 +23,14 @@ type Conn struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
+	// firstDeadline, when set, bounds the arrival of the FIRST
+	// message on this connection (untrusted slow-loris guard). reads
+	// counts successful reads; both are touched only by the
+	// connection's reader path, which is serialized by design (one
+	// framing reader per connection).
+	firstDeadline time.Time
+	reads         int
+
 	wmu  sync.Mutex
 	once sync.Once
 }
@@ -51,9 +59,16 @@ func (c *Conn) RemoteAddr() string {
 	return ""
 }
 
-// Context returns the connection's context: it carries the correlation
-// id and peer id, and is cancelled when the connection closes.
+// Context returns the connection's context: it carries the
+// correlation id (the peer id is NOT in the context — use PeerID),
+// and is cancelled when the connection closes.
 func (c *Conn) Context() context.Context { return c.ctx }
+
+// setFirstMessageDeadline bounds how long the peer may take to send
+// its first message; later messages fall back to the IdleTimeout
+// regime. Set by the Manager for untrusted connections before the
+// handler starts, so no synchronization with the reader is needed.
+func (c *Conn) setFirstMessageDeadline(t time.Time) { c.firstDeadline = t }
 
 // Close closes the connection, cancels its context, and removes the
 // connection from the manager's registry (freeing its per-peer slot).
@@ -69,21 +84,29 @@ func (c *Conn) Close() error {
 	return err
 }
 
-// ReadMessage reads one proto message. With IdleTimeout enabled, each
-// read gets a fresh deadline so dead connections are reaped; a deadline
-// on ctx tightens it further.
+// ReadMessage reads one proto message. The effective read deadline
+// is the tightest of: the first-message deadline (first read on an
+// untrusted connection), now + IdleTimeout (when enabled), and any
+// deadline on ctx. With none of these set, the read is unbounded.
 func (c *Conn) ReadMessage(ctx context.Context) (proto.Message, error) {
+	var deadline time.Time
+	if c.reads == 0 && !c.firstDeadline.IsZero() {
+		deadline = c.firstDeadline
+	}
 	if c.mgr.opts.IdleTimeout > 0 {
-		deadline := time.Now().Add(c.mgr.opts.IdleTimeout)
-		if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		if d := time.Now().Add(c.mgr.opts.IdleTimeout); deadline.IsZero() || d.Before(deadline) {
 			deadline = d
 		}
-		_ = c.nc.SetReadDeadline(deadline)
 	}
+	if d, ok := ctx.Deadline(); ok && (deadline.IsZero() || d.Before(deadline)) {
+		deadline = d
+	}
+	_ = c.nc.SetReadDeadline(deadline)
 	m, err := proto.ReadMessage(c.nc)
 	if err != nil {
 		return proto.Message{}, err
 	}
+	c.reads++
 	return m, nil
 }
 
