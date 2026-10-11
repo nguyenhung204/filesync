@@ -17,3 +17,6 @@
 - [ ] Job 004: daemon dùng transport.DefaultOptions() (không tự đặt MDNS=false bằng bool zero).
 - [ ] Job 004 lưu ý từ approver job 003: chữ ký DialPair(ctx, tm, addr, code); phía acceptor KHÔNG lưu Addresses của initiator — phiên sync phải chạy 2 chiều trên cùng kết nối đã mở, không trông chờ dial-back theo địa chỉ nguồn (cổng ephemeral).
 - [ ] Phòng thủ chiều sâu: DecompressChunkPayload tự kiểm trần MaxGzipPayloadBytes + khoảng Size khi caller bỏ qua Validate (approver job 004a).
+- [ ] ƯU TIÊN CAO — job 004b: CLI `history` + `restore` (tầng engine đã có, thiếu bề mặt CLI) + bổ sung 1 dòng README về nợ fsync đường pull (điều kiện của approver job 004).
+- [ ] Phase 2: store-op gộp "complete transfer" để giảm ~7 fsync/file ở đường pull (approver job 004).
+- [ ] Phase 2: cân nhắc hạ trần entry index 1M (spike heap ~471MiB khi bị flood — security round 2 job 004).
