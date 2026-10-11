@@ -91,7 +91,6 @@ func TestSessionMetaTreeEntriesRejected(t *testing.T) {
 	}
 }
 
-
 // floodPeer streams valid index batches with More=true forever
 // until the connection dies. It models the round-1 IMPORTANT 2
 // attacker: every per-message limit passes; only an accumulated
