@@ -179,6 +179,16 @@ func (d *Daemon) refreshIndexedFiles() {
 // error occurs. A second live instance for the same config dir is
 // a fatal error with the D7 message.
 func (d *Daemon) Run(ctx context.Context) error {
+	return d.RunWithReady(ctx, nil)
+}
+
+// RunWithReady is Run plus a readiness callback: onReady, when
+// non-nil, is invoked exactly once after the first status write,
+// when the daemon state is "running" and the transport is serving.
+// It exists so the Windows service host can report SCM RUNNING at
+// the true ready point (job 008 spec D3); Run(ctx) keeps the exact
+// old behaviour for console mode and tests.
+func (d *Daemon) RunWithReady(ctx context.Context, onReady func()) error {
 	if err := os.MkdirAll(d.cfg.ConfigDir, 0o700); err != nil {
 		return fmt.Errorf("filesync: create config dir: %w", err)
 	}
@@ -316,6 +326,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go func() { defer wg.Done(); d.mailboxLoop(rctx) }()
 	d.startWebUI(rctx, &wg)
 	d.writeStatusTick() // first status as early as possible
+	if onReady != nil {
+		onReady()
+	}
 
 	var runErr error
 	select {
