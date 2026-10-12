@@ -249,6 +249,7 @@ func (s *Server) routes() http.Handler {
 		static = http.FileServer(http.FS(sub))
 	}
 	mux.HandleFunc("GET /", s.handleRoot)
+	mux.Handle("GET /words.js", static)
 	mux.Handle("GET /app.js", static)
 	mux.Handle("GET /pairing.js", static)
 	mux.Handle("GET /upload.js", static)

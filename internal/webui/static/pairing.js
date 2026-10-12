@@ -2,8 +2,10 @@
 // Ghép nối (job 009): wizard lần đầu + tab Ghép đôi dùng chung
 // renderer. Hai khối độc lập: (A) hiện mã của máy này, (B) nhập
 // mã của máy kia, cộng mục "Máy ở gần đây" từ mDNS (addendum).
-// An toàn giữ nguyên job 006: fingerprint luôn hiển thị và
-// người dùng tự bấm Duyệt ở cả hai máy — không tự duyệt bao giờ.
+// An toàn giữ nguyên job 006: "căn cước" của máy kia (hình +
+// dãy từ suy ra từ fingerprint, hex trong Chi tiết kỹ thuật)
+// luôn hiển thị và người dùng tự bấm Duyệt ở cả hai máy —
+// không tự duyệt bao giờ.
 
 let pairCodeExpiresAt = 0; // unix giây, dùng chung cả 2 instance
 
@@ -133,7 +135,7 @@ async function dial(btn, pfx) {
       await post("/api/pair/dial", { addr: addr, code: code });
       const msg = $("dial-msg");
       if (msg) msg.textContent = "";
-      toast("Đã nối tới máy kia. Hãy đối chiếu fingerprint trong mục chờ duyệt rồi bấm Duyệt ở cả hai máy.");
+      toast("Đã nối tới máy kia. Hãy đối chiếu hình và dãy từ trong mục chờ duyệt rồi bấm Duyệt ở cả hai máy.");
       loadPending();
     } catch (e) {
       errBox.innerHTML = errorHTML(classifyDialError(e), e.message);
@@ -148,11 +150,11 @@ function pendingCardHTML(p) {
   return "<div class='card pending-card'><div class='peer-name'>⏳ " + esc(p.name) +
     " <span class='hint'>đang xin ghép đôi</span></div>" +
     "<div class='mono'>Device ID: " + esc(p.device_id) + "</div>" +
-    "<div class='hint'>Fingerprint của máy kia — đối chiếu kỹ từng nhóm với màn hình của máy đó. " +
-    "Chỉ bấm Duyệt khi khớp hoàn toàn:</div>" +
-    fingerprintHTML(p.fingerprint) +
+    "<div class='hint'>Nhìn sang màn hình máy kia: hình và dãy từ ở đó phải " +
+    "GIỐNG HỆT ở đây. Giống thì mới bấm Duyệt.</div>" +
+    identityCardHTML(p.fingerprint, 72) +
     "<div class='actions'>" +
-    "<button class='btn btn-primary btn-big' data-confirm='" + esc(p.session_id) + "'>✓ Duyệt — fingerprint khớp</button>" +
+    "<button class='btn btn-primary btn-big' data-confirm='" + esc(p.session_id) + "'>✓ Duyệt — hình và dãy từ khớp</button>" +
     "<button class='btn btn-big' data-reject='" + esc(p.session_id) + "'>✕ Từ chối</button>" +
     "</div></div>";
 }

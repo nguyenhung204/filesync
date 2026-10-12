@@ -181,8 +181,8 @@ async function loadStatus() {
     kv("Địa chỉ của máy này", "<span class='mono'>" + esc(ownAddr) + "</span>") +
     kv("Thư mục đồng bộ", esc(st.sync_dir)) +
     kv("Số vòng đã đồng bộ", st.rounds) +
-    "</dl><div class='hint'>Fingerprint của máy này (đọc cho máy kia đối chiếu khi ghép đôi):</div>" +
-    fingerprintHTML(st.fingerprint);
+    "</dl><div class='hint'>Hình và dãy từ này là “căn cước” của máy bạn — máy kia sẽ thấy y hệt khi ghép nối:</div>" +
+    identityCardHTML(st.fingerprint, 56);
   const warn = $("skip-warning");
   if (st.skipped_version_archives > 0) {
     const last = st.last_version_skip;
