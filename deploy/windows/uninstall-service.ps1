@@ -77,4 +77,11 @@ if ($remaining) {
     exit 1
 }
 
+# Remove the firewall rules the installer added (job 009
+# addendum). Best-effort: a rule already deleted by hand is not
+# an error.
+foreach ($name in @("FileSync (TCP 22000)", "FileSync (UDP 5353)")) {
+    netsh.exe advfirewall firewall delete rule name="$name" | Out-Null
+}
+
 Write-Host "FileSync service removed. (User data and config were left untouched.)"

@@ -33,10 +33,14 @@ type paths struct {
 	exe          string
 	configDir    string
 	shortcutPath string
+	iconPath     string
 }
 
 // computePaths derives the install locations from the per-user
-// environment roots (%LOCALAPPDATA% and %APPDATA%).
+// environment roots (%LOCALAPPDATA% and %APPDATA%). The Desktop
+// shortcut path is deliberately NOT here: the Desktop folder
+// can be redirected (OneDrive), so the shortcut payload asks
+// PowerShell to resolve it at install time (spec D1).
 func computePaths(localAppData, appData string) paths {
 	installDir := filepath.Join(localAppData, "Programs", "filesync")
 	return paths{
@@ -45,6 +49,7 @@ func computePaths(localAppData, appData string) paths {
 		configDir:  filepath.Join(appData, "filesync"),
 		shortcutPath: filepath.Join(appData, "Microsoft", "Windows",
 			"Start Menu", "Programs", "FileSync.lnk"),
+		iconPath: filepath.Join(installDir, "filesync.ico"),
 	}
 }
 
@@ -186,15 +191,27 @@ func psQuote(s string) string {
 }
 
 // shortcutCommand builds the PowerShell -Command payload that
-// creates the Start Menu shortcut via WScript.Shell. The shortcut
-// opens the Web UI through `filesync.exe ui`.
+// creates BOTH shortcuts via WScript.Shell (job 009 spec D1):
+// the Start Menu one and a Desktop one. Both open the Web UI
+// through `filesync.exe ui` and carry the logo icon. The
+// Desktop folder is resolved by PowerShell itself
+// ([Environment]::GetFolderPath) because it may be redirected
+// (OneDrive) — a Go-side %USERPROFILE%\Desktop guess would
+// silently miss. Every path goes through psQuote (job 007
+// injection lesson).
 func shortcutCommand(p paths) string {
-	return `$s = (New-Object -ComObject WScript.Shell).CreateShortcut(` + psQuote(p.shortcutPath) + `); ` +
-		`$s.TargetPath = ` + psQuote(p.exe) + `; ` +
-		`$s.Arguments = 'ui'; ` +
-		`$s.WorkingDirectory = ` + psQuote(p.installDir) + `; ` +
-		`$s.Description = 'Mo giao dien FileSync'; ` +
-		`$s.Save()`
+	one := func(varName, createExpr string) string {
+		return `$` + varName + ` = (New-Object -ComObject WScript.Shell).CreateShortcut(` + createExpr + `); ` +
+			`$` + varName + `.TargetPath = ` + psQuote(p.exe) + `; ` +
+			`$` + varName + `.Arguments = 'ui'; ` +
+			`$` + varName + `.WorkingDirectory = ` + psQuote(p.installDir) + `; ` +
+			`$` + varName + `.Description = 'Mo giao dien FileSync'; ` +
+			`$` + varName + `.IconLocation = ` + psQuote(p.iconPath+",0") + `; ` +
+			`$` + varName + `.Save(); `
+	}
+	return one("s", psQuote(p.shortcutPath)) +
+		`$desk = [Environment]::GetFolderPath('Desktop'); ` +
+		`if ($desk) { ` + one("d", `(Join-Path $desk 'FileSync.lnk')`) + `}`
 }
 
 // regAddCommands returns one argv slice per registry value of the
@@ -211,7 +228,7 @@ func regAddCommands(p paths) [][]string {
 		sz("DisplayName", "FileSync"),
 		sz("DisplayVersion", setupVersion),
 		sz("InstallLocation", p.installDir),
-		sz("DisplayIcon", p.exe),
+		sz("DisplayIcon", p.iconPath),
 		sz("UninstallString", `"`+p.exe+`" uninstall-service`),
 		dword("NoModify", "1"),
 		dword("NoRepair", "1"),
@@ -272,9 +289,9 @@ func taskkillArgs(pid int) []string {
 type stuckDecision int
 
 const (
-	stuckProceed stuckDecision = iota // already STOPPED: carry on to delete
-	stuckKillThenDelete               // wedged *_PENDING: kill its process, then delete
-	stuckFail                         // anything else: fail as before, hands off
+	stuckProceed        stuckDecision = iota // already STOPPED: carry on to delete
+	stuckKillThenDelete                      // wedged *_PENDING: kill its process, then delete
+	stuckFail                                // anything else: fail as before, hands off
 )
 
 // stuckAction decides from the last observed service state
@@ -291,6 +308,68 @@ func stuckAction(state string) stuckDecision {
 	default:
 		return stuckFail
 	}
+}
+
+// shouldOpenUI decides whether THIS process should open the
+// Web UI after a successful install (job 009 spec D1/F1). Two
+// processes can be the one to do it: the non-elevated parent
+// that relayed (it runs as the real user, so its browser opens
+// in the right session) and a directly-elevated run with no
+// relay. relayOrInstallCode is the relay's propagated exit code
+// on the first path and install()'s code on the second; both
+// must be 0. The elevated child (sentinel --elevated) NEVER
+// opens the UI: the parent does it, and a browser launched from
+// the elevated child would land in the wrong context.
+func shouldOpenUI(isAdminNow bool, args []string, relayOrInstallCode int) bool {
+	_ = isAdminNow // both successful paths open; only the code + sentinel decide
+	for _, a := range args {
+		if a == "--elevated" {
+			return false
+		}
+	}
+	return relayOrInstallCode == 0
+}
+
+// The Windows Firewall rules (job 009 addendum): inbound, for
+// the daemon program only, Private profile only — the sync port
+// (TCP 22000 by default config) and the mDNS discovery port
+// (UDP 5353). Without them Windows Firewall silently blocks
+// inbound sync/discovery, especially for the service. The
+// protocol/port pair is part of the rule name so add/delete stay
+// symmetric, and the port tracks the default listen config.
+
+const (
+	firewallRuleTCP = "FileSync (TCP 22000)"
+	firewallRuleUDP = "FileSync (UDP 5353)"
+	syncPortTCP     = "22000"
+	mdnsPortUDP     = "5353"
+)
+
+// firewallAddCommands returns netsh argv pairs that (re)create
+// the two inbound rules for exe. netsh rule names are unique
+// keys: the caller deletes first, then adds.
+func firewallAddCommands(exe string) [][]string {
+	mk := func(name, protocol, port string) []string {
+		return []string{"advfirewall", "firewall", "add", "rule",
+			"name=" + name, "dir=in", "action=allow",
+			"program=" + exe, "enable=yes", "profile=private",
+			"protocol=" + protocol, "localport=" + port}
+	}
+	return [][]string{
+		mk(firewallRuleTCP, "TCP", syncPortTCP),
+		mk(firewallRuleUDP, "UDP", mdnsPortUDP),
+	}
+}
+
+// firewallDeleteCommands returns netsh argv pairs removing both
+// rules (all profiles — delete has no profile filter; a missing
+// rule just makes netsh report it absent, which callers treat
+// as a warning at most).
+func firewallDeleteCommands() [][]string {
+	del := func(name string) []string {
+		return []string{"advfirewall", "firewall", "delete", "rule", "name=" + name}
+	}
+	return [][]string{del(firewallRuleTCP), del(firewallRuleUDP)}
 }
 
 // consoleModeWithoutQuickEdit mirrors the helper in

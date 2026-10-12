@@ -181,8 +181,8 @@ func TestRegAddCommands(t *testing.T) {
 	if _, data := get("InstallLocation"); data != p.installDir {
 		t.Errorf("InstallLocation = %q", data)
 	}
-	if _, data := get("DisplayIcon"); data != p.exe {
-		t.Errorf("DisplayIcon = %q", data)
+	if _, data := get("DisplayIcon"); data != p.iconPath {
+		t.Errorf("DisplayIcon = %q, want icon path %q", data, p.iconPath)
 	}
 	if _, data := get("UninstallString"); data != `"`+p.exe+`" uninstall-service` {
 		t.Errorf("UninstallString = %q", data)
@@ -218,7 +218,7 @@ func TestElevationCommand(t *testing.T) {
 }
 
 // psOutsideLiterals returns the parts of a PowerShell payload
-// that are NOT inside single-quoted string literals ('' inside a
+// that are NOT inside single-quoted string literals (” inside a
 // literal is an escaped quote, per PowerShell rules). Anything
 // dangerous in the output is live code; anything inside a literal
 // is inert data.
@@ -375,6 +375,21 @@ func TestShortcutCommand(t *testing.T) {
 	}
 	if !strings.Contains(cmd, "$s.Arguments = 'ui'") {
 		t.Errorf("shortcut must open the UI via `filesync.exe ui`: %q", cmd)
+	}
+	// Job 009: BOTH shortcuts (Start Menu + Desktop) with the
+	// brand icon; Desktop resolved by PowerShell itself.
+	if !strings.Contains(cmd, "$d.Arguments = 'ui'") {
+		t.Errorf("desktop shortcut missing from payload: %q", cmd)
+	}
+	if !strings.Contains(cmd, `[Environment]::GetFolderPath('Desktop')`) ||
+		!strings.Contains(cmd, `(Join-Path $desk 'FileSync.lnk')`) {
+		t.Errorf("desktop shortcut must resolve the Desktop folder at runtime: %q", cmd)
+	}
+	quotedIcon := strings.ReplaceAll(p.iconPath, "'", "''")
+	for _, v := range []string{"$s.IconLocation", "$d.IconLocation"} {
+		if !strings.Contains(cmd, v+" = '"+quotedIcon+",0'") {
+			t.Errorf("%s does not point at the brand icon: %q", v, cmd)
+		}
 	}
 	// Apostrophes in user names must be doubled for PowerShell
 	// single-quoted literals.

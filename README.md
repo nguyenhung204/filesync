@@ -84,12 +84,16 @@ systemctl --user enable --now filesync
 **Recommended: the one-file installer.** Download `FileSync-Setup.exe`
 from a GitHub Release and double-click it. It asks for admin rights,
 installs `filesync.exe`, runs `init`, registers the auto-start service,
-and only reports success after the service has been verified RUNNING.
-It also adds a **FileSync** shortcut to the Start Menu (it opens the
-web management UI) and a standard entry in Windows Settings >
-Apps, where you can uninstall it again (uninstalling removes the
-service, the shortcut and the registry entry; your config and synced
-data are kept).
+opens the Windows Firewall for FileSync (inbound, Private networks
+only: the sync port TCP 22000 and mDNS discovery UDP 5353), and only
+reports success after the service has been verified RUNNING. When the
+install finishes, **your browser opens the management page by itself**
+— no further step is needed. It also adds a **FileSync** shortcut with
+the FileSync logo to both your **Desktop** and the Start Menu (they
+open the web management UI), and a standard entry in Windows Settings
+> Apps, where you can uninstall it again (uninstalling removes the
+service, both shortcuts, the firewall rules and the registry entry;
+your config and synced data are kept).
 
 Upgrades are data-safe: running a newer `FileSync-Setup.exe` just
 replaces the binary and re-registers the service. The installer never
@@ -97,17 +101,24 @@ writes to or deletes your config dir (`%APPDATA%\filesync`, which
 holds your device identity) or your sync folder, and `init` is
 idempotent, so your device ID survives upgrades.
 
-**Version 0.2.1 fix:** in 0.2.0 the daemon did not speak the
-Windows service protocol, so the FileSync service could wedge in
-START_PENDING forever and a reinstall then failed while trying to
-stop the old service. 0.2.1 makes the daemon a real Windows
-service (it reports RUNNING/STOPPED to the Service Control
-Manager and shuts down gracefully on stop), and the 0.2.1
-installer recognises a wedged pending-state service from an
-older install, terminates exactly that service's own process,
-and then upgrades normally. If you installed 0.2.0, just run the
-0.2.1 `FileSync-Setup.exe` over it — config and data are kept as
-with every upgrade.
+**Version 0.3.0 notes:** 0.3.0 is the "install and it just
+works" release. It keeps the 0.2.1 service fix (in 0.2.0 the daemon
+did not speak the Windows service protocol, so the FileSync service
+could wedge in START_PENDING forever; the daemon is now a real
+Windows service that reports RUNNING only once it is actually
+listening, and the installer recognises a wedged pending-state
+service from an older install, terminates exactly that service's
+own process, and then upgrades normally) and adds the auto-opening
+installer, the logo, and the redesigned web UI described below.
+If you installed an older version, just run the 0.3.0
+`FileSync-Setup.exe` over it — config and data are kept as with
+every upgrade.
+
+About icons: the FileSync logo appears on the Desktop and Start
+Menu shortcuts, in Settings > Apps, as the web page's favicon and
+in the page header. The `.exe` files themselves keep Go's default
+icon — embedding an icon into the binaries would need extra
+build tooling this release deliberately avoids.
 
 Note: the installer is not code-signed yet, so Windows SmartScreen
 may ask once on first run — choose *More info > Run anyway*.
@@ -195,11 +206,37 @@ management page on this machine:
 filesync ui     # prints the URL and opens it in your browser
 ```
 
-Default address: `http://127.0.0.1:22080`. From there you can see
-sync status and warnings, pair new devices (create a code, or dial
-another machine's code — the fingerprint confirmation step stays
-manual, exactly like the CLI), revoke devices, resolve conflicts,
-browse version history and restore, and pause/resume syncing.
+Default address: `http://127.0.0.1:22080`.
+
+**First run is a pairing wizard.** While no device is paired yet,
+the page opens with a plain-language pairing wizard instead of the
+management tabs: *show this machine's code* (with this machine's
+address printed big, ready to read out) or *enter the other
+machine's code*. Machines running FileSync on the same network
+also appear under **"Máy ở gần đây" (nearby machines)** — click one
+to fill in its address instead of typing it. The fingerprint
+confirmation step stays manual on both machines, exactly like the
+CLI — nothing is ever approved automatically. Once pairing
+completes on both sides, the page switches to the main screen by
+itself.
+
+**The main screen starts with a drag-and-drop box.** Drop files
+(or whole folders) onto it — or use the pick buttons — and they
+are streamed into this machine's sync folder, then sync to the
+other machine as usual. Dropping is exactly like copying the file
+into the sync folder with Explorer: a same-name file overwrites
+the copy on *this* machine (the receiving side still archives the
+old version into its version history when the overwrite arrives),
+and if syncing is paused the file waits in the folder until you
+resume. Below the drop box, the **"Đang chuyển" (transferring)**
+panel shows live progress in both directions — what is being sent
+and what is being received, with percentages — and errors are
+explained in plain language with the technical detail folded away
+under "Chi tiết kỹ thuật".
+
+From the other tabs you can also see paired devices and revoke
+them, resolve conflicts, browse version history and restore, and
+pause/resume syncing.
 
 The URL contains a secret access token — **do not share it**.
 Anyone with the token (or the `ui-token` file in the config dir)

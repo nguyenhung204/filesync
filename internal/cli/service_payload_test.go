@@ -6,7 +6,7 @@ import (
 )
 
 // psOutsideLiterals returns the parts of a PowerShell payload
-// that are NOT inside single-quoted string literals ('' inside a
+// that are NOT inside single-quoted string literals (” inside a
 // literal is an escaped quote, per PowerShell rules). Anything
 // dangerous in the output is live code; anything inside a literal
 // is inert data.
@@ -175,5 +175,34 @@ func TestSvcPsQuote(t *testing.T) {
 	}
 	if got := svcPsQuote(`C:\plain\path`); got != `'C:\plain\path'` {
 		t.Errorf("svcPsQuote = %q", got)
+	}
+}
+
+// Job 009: the Desktop-shortcut removal payload and the
+// firewall delete builders used by uninstall-service.
+func TestSvcDesktopShortcutRemoveCommand(t *testing.T) {
+	cmd := svcDesktopShortcutRemoveCommand()
+	for _, want := range []string{
+		`[Environment]::GetFolderPath('Desktop')`,
+		`(Join-Path $desk 'FileSync.lnk')`,
+		"Remove-Item",
+		"SilentlyContinue",
+	} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("desktop remove command missing %q: %s", want, cmd)
+		}
+	}
+}
+
+func TestSvcFirewallDeleteCommands(t *testing.T) {
+	cmds := svcFirewallDeleteCommands()
+	if len(cmds) != 2 {
+		t.Fatalf("svcFirewallDeleteCommands = %d, want 2", len(cmds))
+	}
+	joined := strings.Join(cmds[0], " ") + "|" + strings.Join(cmds[1], " ")
+	for _, want := range []string{"FileSync (TCP 22000)", "FileSync (UDP 5353)", "delete", "rule"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("firewall delete commands missing %q: %s", want, joined)
+		}
 	}
 }

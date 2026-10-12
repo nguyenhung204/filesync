@@ -136,6 +136,16 @@ func svcDoUninstall(e *env) int {
 			"Start Menu", "Programs", "FileSync.lnk")
 		_ = os.Remove(shortcut)
 	}
+	// Desktop shortcut (job 009): the Desktop folder may be
+	// redirected, so removal goes through the PowerShell idiom
+	// the installer used to create it. Best-effort throughout.
+	_ = svcRun("powershell", "-NoProfile", "-Command", svcDesktopShortcutRemoveCommand())
+	// Firewall rules (job 009 addendum): remove what the
+	// installer added. Best-effort — a rule the user already
+	// deleted by hand is not an error worth reporting.
+	for _, args := range svcFirewallDeleteCommands() {
+		_ = svcRun("netsh", args...)
+	}
 	installDir := ""
 	if self, err := os.Executable(); err == nil {
 		installDir = filepath.Dir(self)

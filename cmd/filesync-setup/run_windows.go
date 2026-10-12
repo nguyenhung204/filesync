@@ -97,8 +97,9 @@ func disableConsoleQuickEdit() {
 // run is the installer entry point.
 func run() int {
 	disableConsoleQuickEdit()
+	args := os.Args[1:]
 	if !isAdmin() {
-		if hasArg(os.Args[1:], "--elevated") {
+		if hasArg(args, "--elevated") {
 			// Already relaunched once and still not admin: do
 			// not loop elevation forever.
 			code := fail("Quyen admin",
@@ -107,11 +108,67 @@ func run() int {
 			waitEnter()
 			return code
 		}
-		return relayElevated()
+		code := relayElevated()
+		// The non-elevated parent is the process that opens the
+		// UI after a successful install (spec D1/F1): it runs as
+		// the real user, so the browser lands in the right
+		// session. The elevated child never opens it.
+		if shouldOpenUI(false, args, code) {
+			if p, ok := currentUserPaths(); ok {
+				openUIAfterInstall(p)
+			}
+		}
+		return code
 	}
 	code := install()
+	if shouldOpenUI(true, args, code) {
+		// Direct "Run as administrator" (no relay, no sentinel):
+		// this same process opens the UI on success. With the
+		// sentinel present shouldOpenUI is false — the parent
+		// handles it (spec D1).
+		if p, ok := currentUserPaths(); ok {
+			openUIAfterInstall(p)
+		}
+	}
 	waitEnter()
 	return code
+}
+
+// currentUserPaths derives the install paths from THIS
+// process's environment (the user's own profile variables).
+func currentUserPaths() (paths, bool) {
+	localAppData := os.Getenv("LOCALAPPDATA")
+	appData := os.Getenv("APPDATA")
+	if localAppData == "" || appData == "" {
+		return paths{}, false
+	}
+	return computePaths(localAppData, appData), true
+}
+
+// openUIAfterInstall waits (briefly) for the freshly started
+// service's Web UI to publish its token file, then launches
+// `filesync.exe ui`, which opens the browser already signed in.
+// Entirely best-effort (spec D1): any failure only prints the
+// fallback line, and the install's exit code never changes.
+func openUIAfterInstall(p paths) {
+	tokenPath := filepath.Join(p.configDir, "ui-token")
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if _, err := os.Stat(tokenPath); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			fmt.Println("Mo giao dien bang shortcut FileSync tren Desktop hoac Start Menu.")
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if err := exec.Command(p.exe, "ui").Start(); err != nil {
+		fmt.Printf("[CANH BAO] Khong tu mo duoc giao dien: %v\n", err)
+		fmt.Println("Mo giao dien bang shortcut FileSync tren Desktop hoac Start Menu.")
+		return
+	}
+	fmt.Println("Da mo giao dien FileSync trong trinh duyet.")
 }
 
 // relayElevated relaunches this exe elevated and waits for the
@@ -173,7 +230,7 @@ func install() int {
 		return code
 	}
 
-	fmt.Println("[6/6] Tao shortcut Start Menu va muc go cai dat...")
+	fmt.Println("[6/6] Tao shortcut Desktop + Start Menu, icon va muc go cai dat...")
 	warnShortcutAndRegistry(p)
 
 	printSummary(p, info)
@@ -242,6 +299,14 @@ func extractPayload(p paths) int {
 			_ = os.Remove(tmp)
 			return fail("Cai dat", "khong thay duoc filesync.exe: "+err2.Error())
 		}
+	}
+	// The brand icon rides along next to the exe (spec D1): the
+	// shortcuts and the Add/Remove Programs entry point at it. A
+	// failed icon write only warns — the install itself is done.
+	if len(icon) < 4 || string(icon[:4]) != "\x00\x00\x01\x00" {
+		fmt.Println("[CANH BAO] Ban build nay thieu file icon FileSync (filesync.ico).")
+	} else if err := os.WriteFile(p.iconPath, icon, 0o644); err != nil {
+		fmt.Printf("[CANH BAO] Khong ghi duoc file icon: %v\n", err)
 	}
 	return 0
 }
@@ -362,21 +427,45 @@ func pollGone(timeout time.Duration) bool {
 	}
 }
 
-// warnShortcutAndRegistry performs spec D3 step 7. Failures here
-// only warn: the service is already installed and RUNNING, so the
-// install must not be rolled back for a missing shortcut.
+// warnShortcutAndRegistry performs spec D3 step 7 plus the job
+// 009 additions (Desktop shortcut via the same payload, brand
+// icon, firewall rules). Failures here only warn: the service
+// is already installed and RUNNING, so the install must not be
+// rolled back for a missing shortcut or a refused firewall rule.
 func warnShortcutAndRegistry(p paths) {
 	res := runCmd("powershell", "-NoProfile", "-Command", shortcutCommand(p))
 	if res.code != 0 {
-		fmt.Printf("[CANH BAO] Khong tao duoc shortcut Start Menu (powershell tra ma %d).\n", res.code)
+		fmt.Printf("[CANH BAO] Khong tao duoc shortcut Desktop/Start Menu (powershell tra ma %d).\n", res.code)
 		fmt.Println("Ban van mo giao dien bang lenh: filesync.exe ui")
 	}
+	warnFirewallRules(p)
 	for _, args := range regAddCommands(p) {
 		res := runCmd("reg.exe", args...)
 		if res.code != 0 {
 			fmt.Printf("[CANH BAO] Khong ghi duoc muc go cai dat (reg add %s tra ma %d).\n",
 				args[3], res.code)
 			fmt.Println("Service van chay binh thuong; go cai dat bang uninstall-service.ps1 hoac lenh filesync.exe uninstall-service.")
+			return
+		}
+	}
+}
+
+// warnFirewallRules (re)creates the FileSync inbound firewall
+// rules (job 009 addendum): without them Windows Firewall can
+// silently block sync (TCP) and discovery (UDP 5353), above all
+// for the service. Delete-then-add keeps reruns idempotent.
+// Any failure warns with the manual route and never blocks the
+// install.
+func warnFirewallRules(p paths) {
+	for _, args := range firewallDeleteCommands() {
+		_ = runCmd("netsh", args...) // absent rule = fine here
+	}
+	for _, args := range firewallAddCommands(p.exe) {
+		res := runCmd("netsh", args...)
+		if res.code != 0 {
+			fmt.Printf("[CANH BAO] Khong mo duoc tuong lua cho FileSync (%s, netsh tra ma %d).\n",
+				args[4], res.code)
+			fmt.Println("Neu may kia khong thay may nay, hay mo Windows Firewall va cho phep filesync.exe o mang Private.")
 			return
 		}
 	}
@@ -392,7 +481,7 @@ func printSummary(p paths, info initInfo) {
 	if info.SyncDir != "" {
 		fmt.Println("Thu muc dong bo: " + info.SyncDir)
 	}
-	fmt.Println("Mo giao dien quan ly: Start Menu > FileSync (hoac chay filesync.exe ui)")
+	fmt.Println("Mo giao dien quan ly: shortcut FileSync tren Desktop hoac Start Menu (hoac chay filesync.exe ui)")
 	fmt.Println("File exe nam tai: " + p.exe)
 	fmt.Println("============================================================")
 }

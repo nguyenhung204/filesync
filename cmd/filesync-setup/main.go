@@ -11,7 +11,7 @@ import "os"
 // setupVersion must match the daemon version in cmd/filesync
 // (var version). scripts/build-release.sh greps both and fails
 // the packaging if they drift.
-const setupVersion = "0.2.1"
+const setupVersion = "0.3.0"
 
 func main() {
 	os.Exit(run())

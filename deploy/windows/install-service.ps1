@@ -119,5 +119,21 @@ if ($lastStatus -ne "Running") {
     exit 1
 }
 
+# Firewall (job 009 addendum): inbound rules for the daemon
+# program only, Private profile only - sync (TCP 22000) and
+# mDNS discovery (UDP 5353). Without them Windows Firewall can
+# silently block inbound sync/discovery, especially for the
+# service. Failures only warn: the service is already RUNNING.
+foreach ($rule in @(
+    @{ Name = "FileSync (TCP 22000)"; Protocol = "TCP"; Port = "22000" },
+    @{ Name = "FileSync (UDP 5353)"; Protocol = "UDP"; Port = "5353" }
+)) {
+    netsh.exe advfirewall firewall delete rule name="$($rule.Name)" | Out-Null
+    netsh.exe advfirewall firewall add rule name="$($rule.Name)" dir=in action=allow program="$BinaryPath" enable=yes profile=private protocol=$($rule.Protocol) localport=$($rule.Port) | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "WARNING: could not create firewall rule '$($rule.Name)' (netsh exit $LASTEXITCODE). If other machines cannot see this one, allow filesync.exe in Windows Firewall on Private networks."
+    }
+}
+
 Write-Host "FileSync service installed and RUNNING. Config dir: $ConfigDir"
 Write-Host "Check it with: filesync --config-dir `"$ConfigDir`" status"
