@@ -199,10 +199,16 @@ func TestWebUIStatusAndPauseResume(t *testing.T) {
 	if st["state"] != "running" {
 		t.Fatalf("state = %v, want running", st["state"])
 	}
+	// ui_addr is published by a polling goroutine once the web UI
+	// has bound (startWebUI), so under full-suite load the first
+	// status read can beat it; poll like waitUI does for the
+	// token instead of asserting on a single read (tester 009:
+	// flaked 1x in a parallel go test ./... run, ui_addr = <nil>).
 	wantAddr := fmt.Sprintf("127.0.0.1:%d", port)
-	if st["ui_addr"] != wantAddr {
-		t.Fatalf("ui_addr = %v, want %s", st["ui_addr"], wantAddr)
-	}
+	waitFor(t, "status reports ui_addr", 10*time.Second, func() bool {
+		st, err := ui.get("/api/status")
+		return err == nil && st["ui_addr"] == wantAddr
+	})
 	if _, err := ui.post("/api/pause", nil); err != nil {
 		t.Fatal(err)
 	}
