@@ -65,7 +65,7 @@ func (e *Engine) executePull(ctx context.Context, s *session, tgt pullTarget) pu
 		e.setPullState(peer, PullState{Path: tgt.destPath, PeerID: peer, BytesTotal: dest.Size, State: "failed", Err: "bad_remote_path"})
 		return pullFailed
 	}
-	if isMetaTreePath(tgt.destPath) {
+	if IsMetaTreePath(tgt.destPath) {
 		// Defense in depth (the session filter already dropped
 		// such entries): a pull must never write into the
 		// .filesync metadata tree, whatever path produced it.

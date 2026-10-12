@@ -101,6 +101,9 @@ func (e *Engine) serveChunkRequest(s *session, ctx context.Context, m proto.Mess
 			return
 		}
 		e.addBytesSent(int64(meta.Size))
+		// Display-only send progress (job 009 D3): the serving
+		// side otherwise has no per-file progress surface.
+		e.noteSendChunk(s.peerID(), req.Path, src.Size, int64(meta.Size))
 	}
 }
 

@@ -93,7 +93,7 @@ func TestSessionMetaTreeEntriesRejected(t *testing.T) {
 
 // TestSessionMetaTreeCaseAndDepthVariantsRejected extends the
 // round-2 regression test with the round-2 security review's
-// bypasses: the first version of isMetaTreePath matched only the
+// bypasses: the first version of IsMetaTreePath matched only the
 // first segment, exact case — so ".Filesync/planted.txt" and
 // ".FILESYNC/trash/fake.txt" sailed through all three layers.
 // On Linux they only grow a harmless shadow tree, but on the
@@ -159,7 +159,7 @@ func TestSessionMetaTreeCaseAndDepthVariantsRejected(t *testing.T) {
 // test for the round-3 security review's last open variant:
 // U+0131 (dotless ı). Go's strings.EqualFold has no fold mapping
 // for U+0131 — it folds to itself — so ".fılesync/..." passed
-// isMetaTreePath even after the round-3 fix. But Windows
+// IsMetaTreePath even after the round-3 fix. But Windows
 // compares file names through its $UpCase table, built from
 // Unicode UPPERCASE mappings, where ı maps to I: on Windows
 // ".fılesync" IS the real metadata tree, and the round-1
