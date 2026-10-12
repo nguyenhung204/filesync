@@ -95,14 +95,14 @@ func TestUploadDiskFullPrecheck(t *testing.T) {
 
 func TestLanDialAddrs(t *testing.T) {
 	ips := []net.IP{
-		net.ParseIP("127.0.0.1"),        // loopback: excluded
-		net.ParseIP("169.254.10.10"),    // link-local: excluded
-		net.ParseIP("203.0.113.9"),      // public: after privates
-		net.ParseIP("192.168.1.20"),     // private
-		net.ParseIP("10.0.0.5"),         // private
-		net.ParseIP("172.16.0.7"),       // private
-		net.ParseIP("192.168.1.20"),     // duplicate: deduped
-		net.ParseIP("2001:db8::1"),      // IPv6: excluded
+		net.ParseIP("127.0.0.1"),     // loopback: excluded
+		net.ParseIP("169.254.10.10"), // link-local: excluded
+		net.ParseIP("203.0.113.9"),   // public: after privates
+		net.ParseIP("192.168.1.20"),  // private
+		net.ParseIP("10.0.0.5"),      // private
+		net.ParseIP("172.16.0.7"),    // private
+		net.ParseIP("192.168.1.20"),  // duplicate: deduped
+		net.ParseIP("2001:db8::1"),   // IPv6: excluded
 	}
 	got := lanDialAddrs(ips, "22000")
 	want := []string{"192.168.1.20:22000", "10.0.0.5:22000", "172.16.0.7:22000"}

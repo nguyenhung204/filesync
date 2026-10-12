@@ -105,7 +105,7 @@ func cmdDevicesRevoke(e *env, args []string) int {
 		return e.fail("revoke: %v", err)
 	}
 	log := logx.New(os.Stderr, logx.LevelError)
-	pm := pairing.NewManager(id, st, log, nil, pairing.Options{})
+	pm := pairing.NewManager(id, st, log, nil, pairing.Options{Name: cfg.DeviceName})
 	deviceID := target
 	if len(matches) == 1 {
 		deviceID = matches[0].DeviceID

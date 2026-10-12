@@ -73,6 +73,15 @@ type ConnCloser interface {
 type Options struct {
 	Now  func() time.Time // nil = time.Now
 	Rand io.Reader        // nil = crypto/rand.Reader
+	// Name is this machine's display name, presented to the
+	// other side during pairing (job 009 fix: the name a user
+	// configured must be the name the other machine's owner
+	// sees in the confirm card — previously the PairRequest
+	// carried the OS hostname and the acceptor's name never
+	// reached the dialer at all, leaving its peer record
+	// nameless). Empty falls back to the OS hostname, matching
+	// config.Default's device-name behaviour.
+	Name string
 }
 
 // Manager owns pairing state for one node: the open code window plus
@@ -84,6 +93,7 @@ type Manager struct {
 	closer ConnCloser
 	now    func() time.Time
 	rand   io.Reader
+	name   string // local display name (Options.Name or hostname)
 
 	mu      sync.Mutex
 	randMu  sync.Mutex
@@ -112,6 +122,10 @@ func NewManager(id *identity.Identity, st *store.Store, log *logx.Logger, closer
 	if rnd == nil {
 		rnd = rand.Reader
 	}
+	name := opts.Name
+	if name == "" {
+		name = deviceName()
+	}
 	return &Manager{
 		id:      id,
 		st:      st,
@@ -119,6 +133,7 @@ func NewManager(id *identity.Identity, st *store.Store, log *logx.Logger, closer
 		closer:  closer,
 		now:     now,
 		rand:    rnd,
+		name:    name,
 		pending: make(map[string]*pendingState),
 	}
 }
@@ -290,8 +305,8 @@ func (m *Manager) currentEpoch() uint64 {
 // session id.
 var errNoSession = errors.New("pairing: unknown or expired session")
 
-// deviceName is the display name sent in PairRequest (the pairing
-// Manager has no config; it uses the hostname like config.Default).
+// deviceName is the fallback display name used when Options.Name
+// is empty: the OS hostname, like config.Default's device name.
 func deviceName() string {
 	if name, err := os.Hostname(); err == nil && name != "" {
 		return name

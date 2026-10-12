@@ -262,7 +262,7 @@ func (d *Daemon) RunWithReady(ctx context.Context, onReady func()) error {
 		topts = *d.transportOpts
 	}
 	tm := transport.NewManager(id, d.cfg, st, d.log, topts)
-	pm := pairing.NewManager(id, st, d.log, tm, pairing.Options{})
+	pm := pairing.NewManager(id, st, d.log, tm, pairing.Options{Name: d.cfg.DeviceName})
 	pm.OnPairProposed(func(pp pairing.PendingPair) { d.addPending(pp) })
 	tm.SetPairingGate(pm)
 

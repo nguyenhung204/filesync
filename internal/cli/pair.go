@@ -255,7 +255,7 @@ func (e *env) pairStandalone(to, code string, deadline time.Time) int {
 		topts.MDNSEnabled = false
 	}
 	tm := transport.NewManager(id, cfg, st, log, topts)
-	pm := pairing.NewManager(id, st, log, tm, pairing.Options{})
+	pm := pairing.NewManager(id, st, log, tm, pairing.Options{Name: cfg.DeviceName})
 	tm.SetPairingGate(pm)
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()

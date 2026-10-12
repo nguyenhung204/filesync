@@ -122,11 +122,18 @@ for (const evt of ["dragleave", "drop"]) {
 dropzone.addEventListener("drop", async (ev) => {
   const dt = ev.dataTransfer;
   const items = [];
+  // Ưu tiên Entry API (giữ cấu trúc thư mục khi thả cả folder).
+  // Nhưng webkitGetAsEntry có thể trả null (file tổng hợp, vài
+  // trình duyệt/nguồn kéo khác) — khi đó phải rơi xuống
+  // dt.files, không được im lặng bỏ qua cả lượt thả.
+  let entries = [];
   if (dt.items && dt.items.length && dt.items[0].webkitGetAsEntry) {
-    const entries = [...dt.items]
+    entries = [...dt.items]
       .filter((i) => i.kind === "file")
       .map((i) => i.webkitGetAsEntry())
       .filter(Boolean);
+  }
+  if (entries.length) {
     for (const entry of entries) {
       await collectEntry(entry, "", items);
     }

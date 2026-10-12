@@ -132,6 +132,11 @@ func (m *Manager) HandleConn(ctx context.Context, c *transport.Conn) {
 	if err := c.WriteMessage(ctx, proto.Message{Header: proto.Header{
 		Type: proto.TypePairChallenge, SessionID: sessionID,
 		Nonce: base64.StdEncoding.EncodeToString(nonceB),
+		// The acceptor's display name rides the challenge so
+		// the dialer's confirm card can name this machine
+		// (job 009 fix — it previously never reached the
+		// dialer, whose peer record stayed nameless).
+		Name: m.name,
 	}}); err != nil {
 		return
 	}
@@ -260,7 +265,7 @@ func (m *Manager) DialPair(ctx context.Context, tm *transport.Manager, addr, cod
 	}
 	cctx := conn.Context()
 	if err := conn.WriteMessage(cctx, proto.Message{Header: proto.Header{
-		Type: proto.TypePairRequest, DeviceID: m.id.DeviceID, Name: deviceName(),
+		Type: proto.TypePairRequest, DeviceID: m.id.DeviceID, Name: m.name,
 	}}); err != nil {
 		return fail(fmt.Errorf("pairing: send request: %w", err))
 	}
@@ -277,6 +282,7 @@ func (m *Manager) DialPair(ctx context.Context, tm *transport.Manager, addr, cod
 		return fail(fmt.Errorf("pairing: unexpected %s in response to pair request", msg.Header.Type))
 	}
 	sessionID := msg.Header.SessionID
+	acceptorName := msg.Header.Name // from the challenge (job 009)
 	nonceB, _ := base64.StdEncoding.DecodeString(msg.Header.Nonce)
 	nonceA, err := genNonce(lockedRand{m})
 	if err != nil {
@@ -310,6 +316,7 @@ func (m *Manager) DialPair(ctx context.Context, tm *transport.Manager, addr, cod
 		pair: PendingPair{
 			SessionID:   sessionID,
 			DeviceID:    acceptorID,
+			Name:        acceptorName,
 			Fingerprint: acceptorFP,
 		},
 		conn:     conn,
