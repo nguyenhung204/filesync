@@ -101,6 +101,19 @@ writes to or deletes your config dir (`%APPDATA%\filesync`, which
 holds your device identity) or your sync folder, and `init` is
 idempotent, so your device ID survives upgrades.
 
+**Version 0.3.1 notes:** 0.3.1 fixes a serious Windows service
+bug in 0.3.0 and earlier: the daemon silently ignored the
+`--config-dir` in the service command line (it sits after
+`serve`, where the CLI did not look), so the FileSync service ran
+with the system account's default config folder instead of yours.
+The service reported RUNNING, but it created a fresh identity in
+the system profile and the web UI rejected your access link. The
+CLI now honours the flag in the service's command line, so simply
+running the 0.3.1 `FileSync-Setup.exe` over an existing install
+fixes the service in place — no re-registration or data changes
+needed; your existing config and device identity are used as
+intended.
+
 **Version 0.3.0 notes:** 0.3.0 is the "install and it just
 works" release. It keeps the 0.2.1 service fix (in 0.2.0 the daemon
 did not speak the Windows service protocol, so the FileSync service
