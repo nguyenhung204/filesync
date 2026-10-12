@@ -98,12 +98,25 @@ type uiClient struct {
 func waitUI(t *testing.T, td *testDaemon) *uiClient {
 	t.Helper()
 	port := td.cfg.EffectiveUIPort()
-	token, err := webui.ReadToken(td.cfg.ConfigDir)
-	if err != nil {
-		t.Fatalf("read UI token: %v", err)
+	// The token file appears when the web UI goroutine starts,
+	// which startDaemonCfg does not wait for (it returns on the
+	// sync listener) — poll for it inside the same deadline
+	// instead of failing the test on a slow start (job 009:
+	// this race flaked ~1 in 6 runs under load).
+	var token string
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		tok, err := webui.ReadToken(td.cfg.ConfigDir)
+		if err == nil {
+			token = tok
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("read UI token: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	c := &uiClient{base: fmt.Sprintf("http://127.0.0.1:%d", port), token: token, hc: &http.Client{Timeout: 5 * time.Second}}
-	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := c.get("/api/status"); err == nil {
 			return c
