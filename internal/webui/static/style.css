@@ -6,7 +6,7 @@
 :root {
   --paper: #ffffff; --fog: #f3f3f7; --ink: #000000; --graphite: #60646c;
   --pewter: #6f737b; --steel: #8b8d98; --mist: #b9bbc6; --carbon: #15191e;
-  --abyss: #000710; --ember: #ff5900; --ember-hover: #e04e00;
+  --ember: #ff5900; --ember-hover: #e04e00;
   --ok: #178a4c; --warn: #b7791f; --err: #d13438; --info: #2563eb;
   --font: "Inter", -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
@@ -25,7 +25,7 @@ p { margin: 0 0 8px; }
 .hidden { display: none !important; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .88em; overflow-wrap: anywhere; }
 
-/* ---------- header (dải Carbon) & footer (dải Abyss) ---------- */
+/* ---------- header (dải Carbon) ---------- */
 .app-header { background: var(--carbon); color: var(--paper); }
 .header-inner {
   max-width: 1200px; margin: 0 auto; padding: 16px 24px;
@@ -36,12 +36,9 @@ p { margin: 0 0 8px; }
 .brand-logo { width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0; }
 .brand-name { font-size: 20px; font-weight: 600; line-height: 1.2; color: var(--paper); }
 .brand-sub { color: var(--mist); font-size: 12px; overflow-wrap: anywhere; }
-.app-footer { background: var(--abyss); color: var(--mist); margin-top: 32px; }
-.footer-inner { max-width: 1200px; margin: 0 auto; padding: 24px; font-size: 14px; text-align: center; }
-
 /* ---------- khung trang ---------- */
-#app, #wizard { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
-@media (max-width: 640px) { #app, #wizard { padding: 0 16px; } .header-inner { padding: 16px; } }
+#app, #wizard { max-width: 1200px; margin: 0 auto; padding: 0 24px 32px; }
+@media (max-width: 640px) { #app, #wizard { padding: 0 16px 32px; } .header-inner { padding: 16px; } }
 
 /* ---------- pill trạng thái ---------- */
 .pill {
