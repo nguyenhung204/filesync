@@ -218,6 +218,8 @@ function progressHTML(done, total, state) {
 function renderTransfers(st) {
   const sends = st.sends || [];
   const queue = st.queue || [];
+  // Rỗng -> panel thu gọn 1 dòng (.idle trong style.css).
+  $("transfers-panel").classList.toggle("idle", sends.length + queue.length === 0);
   $("transfers-empty").classList.toggle("hidden", sends.length + queue.length > 0);
   $("sending-title").classList.toggle("hidden", !sends.length);
   $("receiving-title").classList.toggle("hidden", !queue.length);

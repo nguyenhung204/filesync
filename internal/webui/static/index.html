@@ -90,8 +90,7 @@
   <div class="card drop-card">
     <div id="dropzone" class="dropzone">
       <div class="drop-title">Kéo file vào đây để chuyển sang máy kia</div>
-      <p class="hint">File thả vào sẽ được đưa vào thư mục đồng bộ của máy này rồi tự chuyển sang máy kia.
-      Nếu trùng tên, bản trên máy này sẽ bị ghi đè — bản cũ phía máy nhận vẫn được lưu trong lịch sử phiên bản.</p>
+      <p class="hint">File sẽ vào thư mục đồng bộ của máy này và tự chuyển sang máy kia. Trùng tên sẽ ghi đè bản ở máy này — bản cũ phía máy nhận vẫn lưu trong lịch sử.</p>
       <div class="row">
         <button id="btn-pick" class="btn btn-primary">Chọn file</button>
         <button id="btn-pick-dir" class="btn">Chọn thư mục</button>
@@ -111,34 +110,34 @@
     <div id="receiving-list"></div>
   </div>
 
-  <div class="grid-2">
+  <div class="stat-grid" id="stat-grid">
+    <div class="card stat"><div class="stat-label">Trạng thái</div><div class="stat-value" id="stat-state">…</div></div>
+    <div class="card stat"><div class="stat-label">Số file đang đồng bộ</div><div class="stat-value" id="stat-files">…</div></div>
+    <div class="card stat"><div class="stat-label">Đã gửi</div><div class="stat-value" id="stat-sent">…</div></div>
+    <div class="card stat"><div class="stat-label">Đã nhận</div><div class="stat-value" id="stat-recv">…</div></div>
+    <div class="card stat"><div class="stat-label">Tốc độ hiện tại</div><div class="stat-value" id="stat-rate">…</div></div>
+  </div>
+  <div id="skip-warning" class="alert alert-warn hidden"></div>
+
+  <div class="grid-2 grid-2-eq">
     <div class="card">
-      <h2>File trong thư mục đồng bộ</h2>
-      <div id="home-files">Đang tải…</div>
+      <h2>Thiết bị này</h2>
+      <div id="overview-body">Đang tải trạng thái…</div>
     </div>
-    <div>
-      <div class="stat-grid" id="stat-grid">
-        <div class="card stat"><div class="stat-label">Trạng thái</div><div class="stat-value" id="stat-state">…</div></div>
-        <div class="card stat"><div class="stat-label">Số file đang đồng bộ</div><div class="stat-value" id="stat-files">…</div></div>
-        <div class="card stat"><div class="stat-label">Đã gửi</div><div class="stat-value" id="stat-sent">…</div></div>
-        <div class="card stat"><div class="stat-label">Đã nhận</div><div class="stat-value" id="stat-recv">…</div></div>
-        <div class="card stat"><div class="stat-label">Tốc độ hiện tại</div><div class="stat-value" id="stat-rate">…</div></div>
+    <div class="card">
+      <h2>Điều khiển đồng bộ</h2>
+      <p class="hint">Tạm dừng chỉ dừng việc đồng bộ — trang quản lý này vẫn hoạt động bình thường.</p>
+      <div class="row">
+        <button id="btn-pause" class="btn btn-warn">⏸ Tạm dừng đồng bộ</button>
+        <button id="btn-resume" class="btn">▶ Tiếp tục đồng bộ</button>
       </div>
-      <div id="skip-warning" class="alert alert-warn hidden"></div>
-      <div class="card">
-        <h2>Thiết bị này</h2>
-        <div id="overview-body">Đang tải trạng thái…</div>
-      </div>
-      <div class="card">
-        <h2>Điều khiển đồng bộ</h2>
-        <p class="hint">Tạm dừng chỉ dừng việc đồng bộ — trang quản lý này vẫn hoạt động bình thường.</p>
-        <div class="row">
-          <button id="btn-pause" class="btn btn-warn">⏸ Tạm dừng đồng bộ</button>
-          <button id="btn-resume" class="btn">▶ Tiếp tục đồng bộ</button>
-        </div>
-        <div id="recent-errors"></div>
-      </div>
+      <div id="recent-errors"></div>
     </div>
+  </div>
+
+  <div class="card">
+    <h2>File trong thư mục đồng bộ</h2>
+    <div id="home-files">Đang tải…</div>
   </div>
 </section>
 
