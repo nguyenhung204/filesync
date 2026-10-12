@@ -136,8 +136,12 @@ copy filesync.exe "$env:LOCALAPPDATA\Programs\filesync\"
 # remove later with: .\deploy\windows\uninstall-service.ps1
 ```
 
-All Windows scripts are plain ASCII and compatible with Windows
-PowerShell 5.1+.
+The PowerShell scripts are UTF-8 **with BOM** and print full
+Vietnamese messages (Windows PowerShell 5.1+ reads the BOM and
+decodes them correctly); the `.bat` launchers stay plain ASCII
+by design, because cmd.exe parses batch text in the OEM
+codepage. The setup and `filesync uninstall-service` consoles
+switch themselves to UTF-8 (code page 65001) before printing.
 
 ### macOS (launchd)
 
