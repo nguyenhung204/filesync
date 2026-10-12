@@ -30,7 +30,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	_ = rc.SetReadDeadline(time.Time{})
 	_ = rc.SetWriteDeadline(time.Time{})
 
-	n, err := s.backend.Upload(r.Context(), rawPath, r.ContentLength, r.Body)
+	cleanPath, n, err := s.backend.Upload(r.Context(), rawPath, r.ContentLength, r.Body)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrInvalidPath):
@@ -47,7 +47,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"path": rawPath, "size": n})
+	writeJSON(w, http.StatusOK, map[string]any{"path": cleanPath, "size": n})
 }
 
 // writeUploadError renders the upload error shape: a user-safe

@@ -69,6 +69,7 @@ func TestWebUIUploadRejectsHostilePaths(t *testing.T) {
 		path, code string
 	}{
 		{"..%2Fescape.txt", "invalid_path"},
+		{".", "invalid_path"}, // the sync root itself is not a file (round-2 NIT: was 500)
 		{".filesync%2Fplanted.txt", "meta_path"},
 		{"sub%2F.Filesync%2Fplanted.txt", "meta_path"},
 	} {

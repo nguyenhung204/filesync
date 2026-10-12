@@ -39,20 +39,27 @@ func (c *countingReader) Read(p []byte) (int, error) {
 //
 // The body is streamed straight from the request into the temp
 // file (never buffered whole), so size is bounded only by disk.
-func (d *Daemon) Upload(_ context.Context, relPath string, sizeHint int64, r io.Reader) (int64, error) {
+func (d *Daemon) Upload(_ context.Context, relPath string, sizeHint int64, r io.Reader) (string, int64, error) {
 	clean, err := validate.ValidateRelPath(relPath, d.cfg.MaxPathLength)
 	if err != nil {
-		return 0, fmt.Errorf("%w: %v", webui.ErrInvalidPath, err)
+		return "", 0, fmt.Errorf("%w: %v", webui.ErrInvalidPath, err)
+	}
+	// "." validates as "the sync root" for peer-path purposes,
+	// but an upload must name a FILE: writing to the root itself
+	// is a client error, not a server fault (job 009 round-2
+	// security NIT — this used to fall through to a 500).
+	if clean == "." {
+		return "", 0, fmt.Errorf("%w: path names the sync folder itself", webui.ErrInvalidPath)
 	}
 	// The ONE meta-tree guard (sync.IsMetaTreePath): catches
 	// .filesync at any segment, any case, and the Windows
 	// dotless-i fold — never reimplement name folding here.
 	if fsync.IsMetaTreePath(clean) {
-		return 0, fmt.Errorf("%w: %s", webui.ErrMetaPath, clean)
+		return "", 0, fmt.Errorf("%w: %s", webui.ErrMetaPath, clean)
 	}
 	if sizeHint >= 0 {
 		if err := safefile.RequireSpace(d.cfg.SyncDir, sizeHint); err != nil {
-			return 0, fmt.Errorf("%w: %v", webui.ErrDiskFull, err)
+			return "", 0, fmt.Errorf("%w: %v", webui.ErrDiskFull, err)
 		}
 	}
 	cr := &countingReader{r: r}
@@ -60,11 +67,11 @@ func (d *Daemon) Upload(_ context.Context, relPath string, sizeHint int64, r io.
 	if err != nil {
 		switch {
 		case safefile.IsLockedErr(err):
-			return 0, fmt.Errorf("%w: %v", webui.ErrLocked, err)
+			return "", 0, fmt.Errorf("%w: %v", webui.ErrLocked, err)
 		case errors.Is(err, safefile.ErrDiskFull), errors.Is(err, syscall.ENOSPC):
-			return 0, fmt.Errorf("%w: %v", webui.ErrDiskFull, err)
+			return "", 0, fmt.Errorf("%w: %v", webui.ErrDiskFull, err)
 		}
-		return 0, err
+		return "", 0, err
 	}
-	return cr.n, nil
+	return clean, cr.n, nil
 }

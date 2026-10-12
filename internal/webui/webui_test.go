@@ -93,19 +93,20 @@ func (f *fakeBackend) Restore(path, _ string) (VersionView, error) {
 	f.record("Restore")
 	return VersionView{Name: "v1", Path: path, Size: 3}, nil
 }
-func (f *fakeBackend) Upload(_ context.Context, relPath string, _ int64, r io.Reader) (int64, error) {
+func (f *fakeBackend) Upload(_ context.Context, relPath string, _ int64, r io.Reader) (string, int64, error) {
 	f.record("Upload")
 	// Stream-count like the real backend: the point is to prove
-	// the handler passes the body through without buffering.
+	// the handler passes the body through without buffering. The
+	// fake's "clean path" is the path unchanged.
 	n, err := io.Copy(io.Discard, r)
 	f.mu.Lock()
 	f.uploadBytes = n
 	f.uploadPath = relPath
 	f.mu.Unlock()
 	if f.uploadErr != nil {
-		return 0, f.uploadErr
+		return "", 0, f.uploadErr
 	}
-	return n, err
+	return relPath, n, err
 }
 
 const testPort = 22080

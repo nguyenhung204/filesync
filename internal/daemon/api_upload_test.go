@@ -29,12 +29,25 @@ func uploadTestDaemon(t *testing.T) *Daemon {
 func TestUploadWritesBytes(t *testing.T) {
 	d := uploadTestDaemon(t)
 	payload := []byte("hello upload")
-	n, err := d.Upload(context.Background(), "sub/hello.txt", int64(len(payload)), bytes.NewReader(payload))
+	clean, n, err := d.Upload(context.Background(), "sub/hello.txt", int64(len(payload)), bytes.NewReader(payload))
 	if err != nil {
 		t.Fatal(err)
 	}
+	if clean != "sub/hello.txt" {
+		t.Fatalf("clean path = %q, want sub/hello.txt", clean)
+	}
 	if n != int64(len(payload)) {
 		t.Fatalf("written = %d, want %d", n, len(payload))
+	}
+	// The returned path is the VALIDATED one: a decomposed
+	// Unicode name comes back NFC-normalized (spec D4 — the
+	// response reports the clean path, not the raw input).
+	clean, _, err = d.Upload(context.Background(), "cafe\u0301.txt", 1, strings.NewReader("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clean != "café.txt" {
+		t.Fatalf("clean path = %q, want NFC-normalized café.txt", clean)
 	}
 	got, err := os.ReadFile(filepath.Join(d.cfg.SyncDir, "sub", "hello.txt"))
 	if err != nil {
@@ -46,7 +59,7 @@ func TestUploadWritesBytes(t *testing.T) {
 	// Overwrite of an existing same-name file is the Explorer
 	// copy-in semantic (spec D4/F5 step 4).
 	payload2 := []byte("second version")
-	if _, err := d.Upload(context.Background(), "sub/hello.txt", int64(len(payload2)), bytes.NewReader(payload2)); err != nil {
+	if _, _, err := d.Upload(context.Background(), "sub/hello.txt", int64(len(payload2)), bytes.NewReader(payload2)); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = os.ReadFile(filepath.Join(d.cfg.SyncDir, "sub", "hello.txt"))
@@ -57,8 +70,11 @@ func TestUploadWritesBytes(t *testing.T) {
 
 func TestUploadRejectsBadPaths(t *testing.T) {
 	d := uploadTestDaemon(t)
-	for _, p := range []string{"../escape.txt", "/abs.txt", "a/../../b.txt", ""} {
-		if _, err := d.Upload(context.Background(), p, 1, strings.NewReader("x")); !errors.Is(err, webui.ErrInvalidPath) {
+	// "." is the degenerate case: it validates as the sync
+	// root, but an upload must name a file — a client error
+	// (400), never a 500 (job 009 round-2 security NIT).
+	for _, p := range []string{"../escape.txt", "/abs.txt", "a/../../b.txt", "", "."} {
+		if _, _, err := d.Upload(context.Background(), p, 1, strings.NewReader("x")); !errors.Is(err, webui.ErrInvalidPath) {
 			t.Errorf("path %q: err = %v, want ErrInvalidPath", p, err)
 		}
 	}
@@ -68,7 +84,7 @@ func TestUploadRejectsBadPaths(t *testing.T) {
 	for _, p := range []string{
 		".filesync/x", ".Filesync/x", "a/.filesync/x", "a/.fılesync/x",
 	} {
-		if _, err := d.Upload(context.Background(), p, 1, strings.NewReader("x")); !errors.Is(err, webui.ErrMetaPath) {
+		if _, _, err := d.Upload(context.Background(), p, 1, strings.NewReader("x")); !errors.Is(err, webui.ErrMetaPath) {
 			t.Errorf("path %q: err = %v, want ErrMetaPath", p, err)
 		}
 		if _, statErr := os.Stat(filepath.Join(d.cfg.SyncDir, filepath.FromSlash(p))); !os.IsNotExist(statErr) {
@@ -81,14 +97,14 @@ func TestUploadDiskFullPrecheck(t *testing.T) {
 	d := uploadTestDaemon(t)
 	// An absurd size hint forces the RequireSpace precheck
 	// without needing a full disk.
-	if _, err := d.Upload(context.Background(), "big.bin", math.MaxInt64, strings.NewReader("x")); !errors.Is(err, webui.ErrDiskFull) {
+	if _, _, err := d.Upload(context.Background(), "big.bin", math.MaxInt64, strings.NewReader("x")); !errors.Is(err, webui.ErrDiskFull) {
 		t.Fatalf("err = %v, want ErrDiskFull", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(d.cfg.SyncDir, "big.bin")); !os.IsNotExist(statErr) {
 		t.Fatal("file written despite the disk-full precheck")
 	}
 	// Unknown size (chunked, -1) skips the precheck and writes.
-	if _, err := d.Upload(context.Background(), "small.bin", -1, strings.NewReader("x")); err != nil {
+	if _, _, err := d.Upload(context.Background(), "small.bin", -1, strings.NewReader("x")); err != nil {
 		t.Fatalf("sizeHint -1: %v", err)
 	}
 }

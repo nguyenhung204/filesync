@@ -150,9 +150,12 @@ type Backend interface {
 	Restore(path, version string) (VersionView, error)
 	// Upload streams one browser-supplied file into the sync dir
 	// (spec D4). sizeHint is the request ContentLength, or -1
-	// when unknown (chunked). Errors wrap the Err* sentinels
-	// below so the handler can map them to a stable code.
-	Upload(ctx context.Context, relPath string, sizeHint int64, r io.Reader) (int64, error)
+	// when unknown (chunked). It returns the validated clean
+	// path the file was actually written to (spec D4: the
+	// response reports the clean path, not the raw query value)
+	// and the byte count. Errors wrap the Err* sentinels below
+	// so the handler can map them to a stable code.
+	Upload(ctx context.Context, relPath string, sizeHint int64, r io.Reader) (string, int64, error)
 }
 
 // Server is the loopback HTTP server. The zero value is not
