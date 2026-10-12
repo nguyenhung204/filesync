@@ -184,10 +184,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 // RunWithReady is Run plus a readiness callback: onReady, when
 // non-nil, is invoked exactly once after the first status write,
-// when the daemon state is "running" and the transport is serving.
-// It exists so the Windows service host can report SCM RUNNING at
-// the true ready point (job 008 spec D3); Run(ctx) keeps the exact
-// old behaviour for console mode and tests.
+// when the daemon state is "running" and the transport is serving,
+// so the Windows service host can report SCM RUNNING at the true
+// ready point (job 008 spec D3).
 func (d *Daemon) RunWithReady(ctx context.Context, onReady func()) error {
 	if err := os.MkdirAll(d.cfg.ConfigDir, 0o700); err != nil {
 		return fmt.Errorf("filesync: create config dir: %w", err)
@@ -291,13 +290,16 @@ func (d *Daemon) RunWithReady(ctx context.Context, onReady func()) error {
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- tm.Serve(rctx, d.handleSyncConn, pm.HandleConn) }()
-	// Surface the real listen address in status as soon as bound.
+	// Surface the real listen address in status as soon as bound;
+	// bound closes once it is set, gating readiness below.
+	bound := make(chan struct{})
 	go func() {
-		for i := 0; i < 500; i++ {
+		for {
 			if addr := tm.Addr(); addr != "" {
 				d.mu.Lock()
 				d.listenAddr = addr
 				d.mu.Unlock()
+				close(bound)
 				return
 			}
 			select {
@@ -325,8 +327,18 @@ func (d *Daemon) RunWithReady(ctx context.Context, onReady func()) error {
 	go func() { defer wg.Done(); d.statusLoop(rctx) }()
 	go func() { defer wg.Done(); d.mailboxLoop(rctx) }()
 	d.startWebUI(rctx, &wg)
-	d.writeStatusTick() // first status as early as possible
-	if onReady != nil {
+	// Ready gate (job 008 spec D3): onReady fires only once the
+	// transport is serving; pre-bind death/shutdown skips it.
+	ready := false
+	select {
+	case <-bound:
+		ready = true
+	case err := <-serveErr:
+		serveErr <- err // hand the outcome to the main select below
+	case <-ctx.Done():
+	}
+	d.writeStatusTick() // first status, now with the listen address
+	if onReady != nil && ready {
 		onReady()
 	}
 
