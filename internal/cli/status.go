@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"filesync/internal/daemon"
@@ -95,6 +96,9 @@ func printLiveStatus(e *env, st daemon.Status) {
 		fmt.Fprintln(e.stdout, "pending pairs:")
 		for _, pp := range st.PendingPairs {
 			fmt.Fprintf(e.stdout, "  %s (%s…) fingerprint %s\n", pp.Name, shortID(pp.DeviceID), pp.Fingerprint)
+			if words := fingerprintWords(pp.Fingerprint); len(words) == 8 {
+				fmt.Fprintf(e.stdout, "    Từ đối chiếu: %s\n", strings.Join(words, " · "))
+			}
 		}
 	}
 	fmt.Fprintln(e.stdout, "peers:")
