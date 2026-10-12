@@ -205,7 +205,7 @@ func shortcutCommand(p paths) string {
 			`$` + varName + `.TargetPath = ` + psQuote(p.exe) + `; ` +
 			`$` + varName + `.Arguments = 'ui'; ` +
 			`$` + varName + `.WorkingDirectory = ` + psQuote(p.installDir) + `; ` +
-			`$` + varName + `.Description = 'Mo giao dien FileSync'; ` +
+			`$` + varName + `.Description = 'Mở giao diện FileSync'; ` +
 			`$` + varName + `.IconLocation = ` + psQuote(p.iconPath+",0") + `; ` +
 			`$` + varName + `.Save(); `
 	}

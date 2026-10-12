@@ -56,22 +56,37 @@ func hasArg(args []string, want string) bool {
 // waitEnter holds the console window open so a double-click user
 // can read the outcome before it closes.
 func waitEnter() {
-	fmt.Print("\nNhan Enter de dong cua so nay...")
+	fmt.Print("\nNhấn Enter để đóng cửa sổ này...")
 	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
 }
 
-// fail prints a [LOI] step failure with detail and returns 1.
+// fail prints a [LỖI] step failure with detail and returns 1.
 func fail(step, detail string) int {
-	fmt.Printf("[LOI] %s: %s\n", step, detail)
+	fmt.Printf("[LỖI] %s: %s\n", step, detail)
 	return 1
 }
 
 var (
-	kernel32DLL        = syscall.NewLazyDLL("kernel32.dll")
-	procGetStdHandle   = kernel32DLL.NewProc("GetStdHandle")
-	procGetConsoleMode = kernel32DLL.NewProc("GetConsoleMode")
-	procSetConsoleMode = kernel32DLL.NewProc("SetConsoleMode")
+	kernel32DLL            = syscall.NewLazyDLL("kernel32.dll")
+	procGetStdHandle       = kernel32DLL.NewProc("GetStdHandle")
+	procGetConsoleMode     = kernel32DLL.NewProc("GetConsoleMode")
+	procSetConsoleMode     = kernel32DLL.NewProc("SetConsoleMode")
+	procSetConsoleCP       = kernel32DLL.NewProc("SetConsoleCP")
+	procSetConsoleOutputCP = kernel32DLL.NewProc("SetConsoleOutputCP")
 )
+
+// setConsoleUTF8 switches the console to UTF-8 (code page
+// 65001) before ANY output (job 009 round 2: the user asked
+// "chữ phải có dấu chứ?" — full Vietnamese diacritics). The
+// all-ASCII text of earlier versions existed only because the
+// console codepage was never set, so diacritics would have
+// rendered as mojibake; with 65001 set first, the proper text
+// below displays correctly. Best effort: a console-less or
+// redirected process simply keeps its current codepage.
+func setConsoleUTF8() {
+	_, _, _ = procSetConsoleOutputCP.Call(65001)
+	_, _, _ = procSetConsoleCP.Call(65001)
+}
 
 // disableConsoleQuickEdit turns off console QuickEdit before
 // anything else runs (spec D5): in QuickEdit "Select" state a
@@ -96,15 +111,16 @@ func disableConsoleQuickEdit() {
 
 // run is the installer entry point.
 func run() int {
+	setConsoleUTF8()
 	disableConsoleQuickEdit()
 	args := os.Args[1:]
 	if !isAdmin() {
 		if hasArg(args, "--elevated") {
 			// Already relaunched once and still not admin: do
 			// not loop elevation forever.
-			code := fail("Quyen admin",
-				"da nang quyen nhung van chua co quyen admin")
-			fmt.Println("Hay chuot phai vao FileSync-Setup.exe va chon \"Run as administrator\".")
+			code := fail("Quyền admin",
+				"đã nâng quyền nhưng vẫn chưa có quyền admin")
+			fmt.Println("Hãy chuột phải vào FileSync-Setup.exe và chọn \"Run as administrator\".")
 			waitEnter()
 			return code
 		}
@@ -158,17 +174,17 @@ func openUIAfterInstall(p paths) {
 			break
 		}
 		if time.Now().After(deadline) {
-			fmt.Println("Mo giao dien bang shortcut FileSync tren Desktop hoac Start Menu.")
+			fmt.Println("Mở giao diện bằng shortcut FileSync trên Desktop hoặc Start Menu.")
 			return
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 	if err := exec.Command(p.exe, "ui").Start(); err != nil {
-		fmt.Printf("[CANH BAO] Khong tu mo duoc giao dien: %v\n", err)
-		fmt.Println("Mo giao dien bang shortcut FileSync tren Desktop hoac Start Menu.")
+		fmt.Printf("[CẢNH BÁO] Không tự mở được giao diện: %v\n", err)
+		fmt.Println("Mở giao diện bằng shortcut FileSync trên Desktop hoặc Start Menu.")
 		return
 	}
-	fmt.Println("Da mo giao dien FileSync trong trinh duyet.")
+	fmt.Println("Đã mở giao diện FileSync trong trình duyệt.")
 }
 
 // relayElevated relaunches this exe elevated and waits for the
@@ -178,17 +194,17 @@ func openUIAfterInstall(p paths) {
 func relayElevated() int {
 	self, err := os.Executable()
 	if err != nil {
-		fmt.Printf("[LOI] Khong xac dinh duoc duong dan cua chinh file cai dat: %v\n", err)
+		fmt.Printf("[LỖI] Không xác định được đường dẫn của chính file cài đặt: %v\n", err)
 		waitEnter()
 		return 1
 	}
-	fmt.Println("FileSync can quyen admin de dang ky Windows service.")
-	fmt.Println("Dang mo hop thoai xin quyen... chon Yes de tiep tuc.")
+	fmt.Println("FileSync cần quyền admin để đăng ký Windows service.")
+	fmt.Println("Đang mở hộp thoại xin quyền... chọn Yes để tiếp tục.")
 	res := runCmd("powershell", "-NoProfile", "-Command",
 		elevationCommand(self, "--elevated"))
 	if res.code != 0 {
-		fmt.Println("[LOI] Khong nang quyen duoc (hop thoai bi huy hoac bi tu choi).")
-		fmt.Println("Hay chuot phai vao FileSync-Setup.exe va chon \"Run as administrator\".")
+		fmt.Println("[LỖI] Không nâng quyền được (hộp thoại bị hủy hoặc bị từ chối).")
+		fmt.Println("Hãy chuột phải vào FileSync-Setup.exe và chọn \"Run as administrator\".")
 		waitEnter()
 		return 1
 	}
@@ -200,37 +216,37 @@ func install() int {
 	localAppData := os.Getenv("LOCALAPPDATA")
 	appData := os.Getenv("APPDATA")
 	if localAppData == "" || appData == "" {
-		return fail("Moi truong", "khong doc duoc LOCALAPPDATA/APPDATA")
+		return fail("Môi trường", "không đọc được LOCALAPPDATA/APPDATA")
 	}
 	p := computePaths(localAppData, appData)
 
-	fmt.Println("[1/6] Kiem tra service cu...")
+	fmt.Println("[1/6] Kiểm tra service cũ...")
 	if code := removeOldService(); code != 0 {
 		return code
 	}
 
-	fmt.Println("[2/6] Cai dat filesync.exe...")
+	fmt.Println("[2/6] Cài đặt filesync.exe...")
 	if code := extractPayload(p); code != 0 {
 		return code
 	}
 
-	fmt.Println("[3/6] Khoi tao cau hinh va dinh danh may...")
+	fmt.Println("[3/6] Khởi tạo cấu hình và định danh máy...")
 	info, code := runInit(p)
 	if code != 0 {
 		return code
 	}
 
-	fmt.Println("[4/6] Dang ky Windows service...")
+	fmt.Println("[4/6] Đăng ký Windows service...")
 	if code := registerService(p); code != 0 {
 		return code
 	}
 
-	fmt.Println("[5/6] Kiem chung service dang chay...")
+	fmt.Println("[5/6] Kiểm chứng service đang chạy...")
 	if code := verifyRunning(); code != 0 {
 		return code
 	}
 
-	fmt.Println("[6/6] Tao shortcut Desktop + Start Menu, icon va muc go cai dat...")
+	fmt.Println("[6/6] Tạo shortcut Desktop + Start Menu, icon và mục gỡ cài đặt...")
 	warnShortcutAndRegistry(p)
 
 	printSummary(p, info)
@@ -249,8 +265,8 @@ func removeOldService() int {
 	state, stopped := pollState("STOPPED", 15*time.Second)
 	if !stopped {
 		if stuckAction(state) != stuckKillThenDelete {
-			return fail("Dung service cu",
-				"service cu chua dung han sau 15 giay (trang thai cuoi: "+state+")")
+			return fail("Dừng service cũ",
+				"service cũ chưa dừng hẳn sau 15 giây (trạng thái cuối: "+state+")")
 		}
 		// The 0.2.0 bug (spec D4): a service whose process never
 		// speaks SCM wedges in a *_PENDING state forever and
@@ -258,20 +274,20 @@ func removeOldService() int {
 		// upgrade. Kill exactly the process queryex attributes
 		// to THIS service — never any other PID — then proceed.
 		if !killServiceProcess(state) {
-			return fail("Dung service cu",
-				"service cu dang treo o trang thai "+state+" va khong tat duoc tien trinh cua no")
+			return fail("Dừng service cũ",
+				"service cũ đang treo ở trạng thái "+state+" và không tắt được tiến trình của nó")
 		}
 		if !waitStoppedOrGone(5 * time.Second) {
-			return fail("Dung service cu", "tien trinh service cu van chua dung sau khi bi tat")
+			return fail("Dừng service cũ", "tiến trình service cũ vẫn chưa dừng sau khi bị tắt")
 		}
 	}
 	res := runCmd("sc.exe", scDeleteArgs()...)
 	if res.code != 0 {
-		return fail("Xoa service cu",
-			fmt.Sprintf("sc.exe delete tra ma %d: %s", res.code, strings.TrimSpace(res.output)))
+		return fail("Xóa service cũ",
+			fmt.Sprintf("sc.exe delete trả mã %d: %s", res.code, strings.TrimSpace(res.output)))
 	}
 	if !pollGone(15 * time.Second) {
-		return fail("Xoa service cu", "service cu van con sau 15 giay")
+		return fail("Xóa service cũ", "service cũ vẫn còn sau 15 giây")
 	}
 	return 0
 }
@@ -281,15 +297,15 @@ func removeOldService() int {
 // half-written exe behind.
 func extractPayload(p paths) int {
 	if len(payload) < 2 || payload[0] != 'M' || payload[1] != 'Z' || len(payload) < 1<<20 {
-		return fail("Cai dat",
-			"ban build nay chua nhung filesync.exe that (dang la placeholder) - hay tai ban Release chinh thuc")
+		return fail("Cài đặt",
+			"bản build này chưa nhúng filesync.exe thật (đang là placeholder) - hãy tải bản Release chính thức")
 	}
 	if err := os.MkdirAll(p.installDir, 0o755); err != nil {
-		return fail("Cai dat", "khong tao duoc thu muc "+p.installDir+": "+err.Error())
+		return fail("Cài đặt", "không tạo được thư mục "+p.installDir+": "+err.Error())
 	}
 	tmp := filepath.Join(p.installDir, "filesync.exe.tmp")
 	if err := os.WriteFile(tmp, payload, 0o755); err != nil {
-		return fail("Cai dat", "khong ghi duoc file tam: "+err.Error())
+		return fail("Cài đặt", "không ghi được file tạm: "+err.Error())
 	}
 	if err := os.Rename(tmp, p.exe); err != nil {
 		// Windows refuses to rename over a locked exe; the old
@@ -297,16 +313,16 @@ func extractPayload(p paths) int {
 		_ = os.Remove(p.exe)
 		if err2 := os.Rename(tmp, p.exe); err2 != nil {
 			_ = os.Remove(tmp)
-			return fail("Cai dat", "khong thay duoc filesync.exe: "+err2.Error())
+			return fail("Cài đặt", "không thay được filesync.exe: "+err2.Error())
 		}
 	}
 	// The brand icon rides along next to the exe (spec D1): the
 	// shortcuts and the Add/Remove Programs entry point at it. A
 	// failed icon write only warns — the install itself is done.
 	if len(icon) < 4 || string(icon[:4]) != "\x00\x00\x01\x00" {
-		fmt.Println("[CANH BAO] Ban build nay thieu file icon FileSync (filesync.ico).")
+		fmt.Println("[CẢNH BÁO] Bản build này thiếu file icon FileSync (filesync.ico).")
 	} else if err := os.WriteFile(p.iconPath, icon, 0o644); err != nil {
-		fmt.Printf("[CANH BAO] Khong ghi duoc file icon: %v\n", err)
+		fmt.Printf("[CẢNH BÁO] Không ghi được file icon: %v\n", err)
 	}
 	return 0
 }
@@ -316,13 +332,13 @@ func extractPayload(p paths) int {
 func runInit(p paths) (initInfo, int) {
 	res := runCmd(p.exe, "init")
 	if res.code != 0 {
-		return initInfo{}, fail("Khoi tao",
-			fmt.Sprintf("filesync.exe init tra ma %d: %s", res.code, strings.TrimSpace(res.output)))
+		return initInfo{}, fail("Khởi tạo",
+			fmt.Sprintf("filesync.exe init trả mã %d: %s", res.code, strings.TrimSpace(res.output)))
 	}
 	fmt.Print(res.output)
 	info := parseInitOutput(res.output)
 	if info.DeviceID == "" {
-		return initInfo{}, fail("Khoi tao", "khong doc duoc device_id tu output cua init")
+		return initInfo{}, fail("Khởi tạo", "không đọc được device_id từ output của init")
 	}
 	return info, 0
 }
@@ -343,8 +359,8 @@ func registerService(p paths) int {
 	for _, s := range steps {
 		res := runCmd("sc.exe", s.args...)
 		if res.code != 0 {
-			return fail("Dang ky service",
-				fmt.Sprintf("sc.exe %s tra ma %d: %s", s.name, res.code, strings.TrimSpace(res.output)))
+			return fail("Đăng ký service",
+				fmt.Sprintf("sc.exe %s trả mã %d: %s", s.name, res.code, strings.TrimSpace(res.output)))
 		}
 	}
 	return 0
@@ -355,9 +371,9 @@ func registerService(p paths) int {
 func verifyRunning() int {
 	state, ok := pollState("RUNNING", 15*time.Second)
 	if !ok {
-		fmt.Printf("[LOI] Kiem chung: service chua chay sau 15 giay (trang thai cuoi: %s).\n", state)
-		fmt.Println("Mo PowerShell va chay lenh sau de xem log cua daemon:")
-		fmt.Println("  filesync.exe serve   (trong thu muc cai dat)")
+		fmt.Printf("[LỖI] Kiểm chứng: service chưa chạy sau 15 giây (trạng thái cuối: %s).\n", state)
+		fmt.Println("Mở PowerShell và chạy lệnh sau để xem log của daemon:")
+		fmt.Println("  filesync.exe serve   (trong thư mục cài đặt)")
 		return 1
 	}
 	return 0
@@ -392,7 +408,7 @@ func killServiceProcess(state string) bool {
 	if !ok || pid <= 0 {
 		return false
 	}
-	fmt.Printf("Service cu dang treo o trang thai %s; dang tat tien trinh cua service (PID %d)...\n", state, pid)
+	fmt.Printf("Service cũ đang treo ở trạng thái %s; đang tắt tiến trình của service (PID %d)...\n", state, pid)
 	return runCmd("taskkill", taskkillArgs(pid)...).code == 0
 }
 
@@ -435,16 +451,16 @@ func pollGone(timeout time.Duration) bool {
 func warnShortcutAndRegistry(p paths) {
 	res := runCmd("powershell", "-NoProfile", "-Command", shortcutCommand(p))
 	if res.code != 0 {
-		fmt.Printf("[CANH BAO] Khong tao duoc shortcut Desktop/Start Menu (powershell tra ma %d).\n", res.code)
-		fmt.Println("Ban van mo giao dien bang lenh: filesync.exe ui")
+		fmt.Printf("[CẢNH BÁO] Không tạo được shortcut Desktop/Start Menu (powershell trả mã %d).\n", res.code)
+		fmt.Println("Bạn vẫn mở giao diện bằng lệnh: filesync.exe ui")
 	}
 	warnFirewallRules(p)
 	for _, args := range regAddCommands(p) {
 		res := runCmd("reg.exe", args...)
 		if res.code != 0 {
-			fmt.Printf("[CANH BAO] Khong ghi duoc muc go cai dat (reg add %s tra ma %d).\n",
+			fmt.Printf("[CẢNH BÁO] Không ghi được mục gỡ cài đặt (reg add %s trả mã %d).\n",
 				args[3], res.code)
-			fmt.Println("Service van chay binh thuong; go cai dat bang uninstall-service.ps1 hoac lenh filesync.exe uninstall-service.")
+			fmt.Println("Service vẫn chạy bình thường; gỡ cài đặt bằng uninstall-service.ps1 hoặc lệnh filesync.exe uninstall-service.")
 			return
 		}
 	}
@@ -463,9 +479,9 @@ func warnFirewallRules(p paths) {
 	for _, args := range firewallAddCommands(p.exe) {
 		res := runCmd("netsh", args...)
 		if res.code != 0 {
-			fmt.Printf("[CANH BAO] Khong mo duoc tuong lua cho FileSync (%s, netsh tra ma %d).\n",
+			fmt.Printf("[CẢNH BÁO] Không mở được tường lửa cho FileSync (%s, netsh trả mã %d).\n",
 				args[4], res.code)
-			fmt.Println("Neu may kia khong thay may nay, hay mo Windows Firewall va cho phep filesync.exe o mang Private.")
+			fmt.Println("Nếu máy kia không thấy máy này, hãy mở Windows Firewall và cho phép filesync.exe ở mạng Private.")
 			return
 		}
 	}
@@ -475,13 +491,13 @@ func warnFirewallRules(p paths) {
 func printSummary(p paths, info initInfo) {
 	fmt.Println()
 	fmt.Println("============================================================")
-	fmt.Println("Cai dat xong. FileSync se tu chay moi khi mo may.")
+	fmt.Println("Cài đặt xong. FileSync sẽ tự chạy mỗi khi mở máy.")
 	fmt.Println("Device ID:   " + info.DeviceID)
 	fmt.Println("Fingerprint: " + info.Fingerprint)
 	if info.SyncDir != "" {
-		fmt.Println("Thu muc dong bo: " + info.SyncDir)
+		fmt.Println("Thư mục đồng bộ: " + info.SyncDir)
 	}
-	fmt.Println("Mo giao dien quan ly: shortcut FileSync tren Desktop hoac Start Menu (hoac chay filesync.exe ui)")
-	fmt.Println("File exe nam tai: " + p.exe)
+	fmt.Println("Mở giao diện quản lý: shortcut FileSync trên Desktop hoặc Start Menu (hoặc chạy filesync.exe ui)")
+	fmt.Println("File exe nằm tại: " + p.exe)
 	fmt.Println("============================================================")
 }

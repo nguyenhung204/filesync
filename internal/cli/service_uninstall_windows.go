@@ -17,8 +17,9 @@ import (
 // ("<exe>" uninstall-service). It mirrors uninstall-service.ps1:
 // config and synced data are NEVER deleted here.
 //
-// All output is plain ASCII (no diacritics), like the rest of the
-// Windows install tooling (console codepage safety, job 005b).
+// Output is full Vietnamese (with diacritics), like the setup
+// tooling: cmdUninstallService switches the console to UTF-8
+// (code page 65001) before printing anything (job 009 round 2).
 
 const uninstallKeyPath = `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\FileSync`
 
@@ -52,19 +53,35 @@ func svcHasArg(args []string, want string) bool {
 	return false
 }
 
+var (
+	procSetConsoleCP       = kernel32.NewProc("SetConsoleCP")
+	procSetConsoleOutputCP = kernel32.NewProc("SetConsoleOutputCP")
+)
+
+// svcSetConsoleUTF8 switches the console to UTF-8 (code page
+// 65001) so the Vietnamese messages below render with their
+// diacritics instead of mojibake — the same move the setup
+// binary makes (cmd/filesync-setup). Best effort: a
+// console-less or redirected process keeps its codepage.
+func svcSetConsoleUTF8() {
+	_, _, _ = procSetConsoleOutputCP.Call(65001)
+	_, _, _ = procSetConsoleCP.Call(65001)
+}
+
 // svcWaitEnter holds the console open: Windows Settings launches
 // the UninstallString in its own window which would otherwise
 // close before the user can read the result.
 func svcWaitEnter(e *env) {
-	fmt.Fprint(e.stdout, "\nNhan Enter de dong cua so nay...")
+	fmt.Fprint(e.stdout, "\nNhấn Enter để đóng cửa sổ này...")
 	_, _ = bufio.NewReader(e.stdin).ReadString('\n')
 }
 
 func cmdUninstallService(e *env, args []string) int {
+	svcSetConsoleUTF8()
 	if !svcIsAdmin() {
 		if svcHasArg(args, "--elevated") {
-			fmt.Fprintln(e.stdout, "[LOI] Da nang quyen nhung van chua co quyen admin.")
-			fmt.Fprintln(e.stdout, "Hay chuot phai vao filesync.exe va chon \"Run as administrator\", roi chay lai lenh uninstall-service.")
+			fmt.Fprintln(e.stdout, "[LỖI] Đã nâng quyền nhưng vẫn chưa có quyền admin.")
+			fmt.Fprintln(e.stdout, "Hãy chuột phải vào filesync.exe và chọn \"Run as administrator\", rồi chạy lại lệnh uninstall-service.")
 			svcWaitEnter(e)
 			return 1
 		}
@@ -80,14 +97,14 @@ func cmdUninstallService(e *env, args []string) int {
 func svcRelayElevated(e *env) int {
 	self, err := os.Executable()
 	if err != nil {
-		fmt.Fprintf(e.stdout, "[LOI] Khong xac dinh duoc duong dan filesync.exe: %v\n", err)
+		fmt.Fprintf(e.stdout, "[LỖI] Không xác định được đường dẫn filesync.exe: %v\n", err)
 		svcWaitEnter(e)
 		return 1
 	}
 	res := svcRun("powershell", "-NoProfile", "-Command", svcElevationPayload(self))
 	if res.code != 0 {
-		fmt.Fprintln(e.stdout, "[LOI] Khong nang quyen duoc (hop thoai bi huy hoac bi tu choi).")
-		fmt.Fprintln(e.stdout, "Hay mo PowerShell quyen admin va chay: filesync.exe uninstall-service")
+		fmt.Fprintln(e.stdout, "[LỖI] Không nâng quyền được (hộp thoại bị hủy hoặc bị từ chối).")
+		fmt.Fprintln(e.stdout, "Hãy mở PowerShell quyền admin và chạy: filesync.exe uninstall-service")
 		svcWaitEnter(e)
 		return 1
 	}
@@ -97,7 +114,7 @@ func svcRelayElevated(e *env) int {
 // svcDoUninstall performs the removal as administrator.
 func svcDoUninstall(e *env) int {
 	if svcRun("sc.exe", "query", "FileSync").code != 0 {
-		fmt.Fprintln(e.stdout, "FileSync service chua duoc cai tren may nay.")
+		fmt.Fprintln(e.stdout, "FileSync service chưa được cài trên máy này.")
 		return 0
 	}
 	// Stop first; ignore its exit code (it errors when the
@@ -107,7 +124,7 @@ func svcDoUninstall(e *env) int {
 	state, stopped := svcPollState("STOPPED", 15*time.Second)
 	if !stopped {
 		if svcStuckAction(state) != svcStuckKillThenDelete {
-			fmt.Fprintf(e.stdout, "[LOI] Service chua dung han sau 15 giay (trang thai cuoi: %s).\n", state)
+			fmt.Fprintf(e.stdout, "[LỖI] Service chưa dừng hẳn sau 15 giây (trạng thái cuối: %s).\n", state)
 			return 1
 		}
 		// The 0.2.0 bug (spec D4): a service whose process
@@ -115,21 +132,21 @@ func svcDoUninstall(e *env) int {
 		// and ignores stop. Kill exactly the process queryex
 		// attributes to THIS service — never any other PID.
 		if !svcKillServiceProcess(e, state) || !svcWaitStoppedOrGone(5*time.Second) {
-			fmt.Fprintln(e.stdout, "[LOI] Khong tat duoc tien trinh cua service dang treo.")
+			fmt.Fprintln(e.stdout, "[LỖI] Không tắt được tiến trình của service đang treo.")
 			return 1
 		}
 	}
 	res := svcRun("sc.exe", "delete", "FileSync")
 	if res.code != 0 {
-		fmt.Fprintf(e.stdout, "[LOI] sc.exe delete tra ma %d: %s\n", res.code, res.output)
+		fmt.Fprintf(e.stdout, "[LỖI] sc.exe delete trả mã %d: %s\n", res.code, res.output)
 		return 1
 	}
 	if !svcPollGone(15 * time.Second) {
-		fmt.Fprintln(e.stdout, "[LOI] Service van con sau 15 giay ke tu khi xoa.")
+		fmt.Fprintln(e.stdout, "[LỖI] Service vẫn còn sau 15 giây kể từ khi xóa.")
 		return 1
 	}
 	if res := svcRun("reg.exe", "delete", uninstallKeyPath, "/f"); res.code != 0 {
-		fmt.Fprintf(e.stdout, "[CANH BAO] Khong xoa duoc muc go cai dat trong Registry (reg delete tra ma %d).\n", res.code)
+		fmt.Fprintf(e.stdout, "[CẢNH BÁO] Không xóa được mục gỡ cài đặt trong Registry (reg delete trả mã %d).\n", res.code)
 	}
 	if appData := os.Getenv("APPDATA"); appData != "" {
 		shortcut := filepath.Join(appData, "Microsoft", "Windows",
@@ -150,9 +167,9 @@ func svcDoUninstall(e *env) int {
 	if self, err := os.Executable(); err == nil {
 		installDir = filepath.Dir(self)
 	}
-	fmt.Fprintln(e.stdout, "Da go service FileSync.")
-	fmt.Fprintln(e.stdout, "Config va du lieu dong bo KHONG bi xoa.")
-	fmt.Fprintf(e.stdout, "Muon xoa han, hay xoa thu muc cai dat %s va thu muc cau hinh %s.\n",
+	fmt.Fprintln(e.stdout, "Đã gỡ service FileSync.")
+	fmt.Fprintln(e.stdout, "Config và dữ liệu đồng bộ KHÔNG bị xóa.")
+	fmt.Fprintf(e.stdout, "Muốn xóa hẳn, hãy xóa thư mục cài đặt %s và thư mục cấu hình %s.\n",
 		installDir, e.configDir)
 	return 0
 }
@@ -187,7 +204,7 @@ func svcKillServiceProcess(e *env, state string) bool {
 	if !ok || pid <= 0 {
 		return false
 	}
-	fmt.Fprintf(e.stdout, "Service dang treo o trang thai %s; dang tat tien trinh cua service (PID %d)...\n", state, pid)
+	fmt.Fprintf(e.stdout, "Service đang treo ở trạng thái %s; đang tắt tiến trình của service (PID %d)...\n", state, pid)
 	return svcRun("taskkill", svcTaskkillArgs(pid)...).code == 0
 }
 
