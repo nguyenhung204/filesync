@@ -4,22 +4,78 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FileSync — Trang quản lý</title>
+<link rel="icon" href="favicon.ico" sizes="any">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header class="app-header">
-  <div class="brand">
-    <span class="logo" aria-hidden="true">⇄</span>
-    <div>
-      <div class="brand-name">FileSync</div>
-      <div class="brand-sub" id="header-device">Trang quản lý trên máy này</div>
+  <div class="header-inner">
+    <div class="brand">
+      <img class="brand-logo" src="logo.png" alt="FileSync" width="32" height="32">
+      <div>
+        <div class="brand-name">FileSync</div>
+        <div class="brand-sub" id="header-device">Trang quản lý trên máy này</div>
+      </div>
     </div>
+    <span id="conn-state" class="pill"><span class="dot"></span>đang tải…</span>
   </div>
-  <span id="conn-state" class="pill pill-gray"><span class="dot"></span>đang tải…</span>
 </header>
 
+<!-- ================= WIZARD GHÉP NỐI LẦN ĐẦU ================= -->
+<section id="wizard" class="hidden">
+  <div class="wizard-card card">
+    <h1>Ghép nối với máy tính kia của bạn</h1>
+    <p class="lead">FileSync chuyển file trực tiếp giữa hai máy của bạn qua mạng Wi-Fi / LAN ở nhà — không qua internet, không cần tài khoản.</p>
+
+    <h2>Máy ở gần đây</h2>
+    <div id="nearby-list-w"></div>
+    <p class="hint" id="nearby-empty-w">Chưa thấy máy nào. Hãy mở FileSync trên máy kia và chắc chắn hai máy cùng một mạng Wi-Fi.</p>
+
+    <div class="wizard-blocks">
+      <div class="wizard-block">
+        <h2>(A) Hiện mã của máy này</h2>
+        <p class="hint">Dùng khi người ở máy kia sẽ nhập mã. Bấm nút, rồi đọc địa chỉ và mã bên dưới cho máy kia.</p>
+        <div class="row">
+          <button id="btn-code-w" class="btn btn-primary">Hiện mã ghép nối</button>
+        </div>
+        <div id="code-display-w" class="code-box hidden">
+          <div class="hint">Địa chỉ của máy này:</div>
+          <div class="own-addr" id="own-addr-w">…</div>
+          <div class="bigcode" id="code-value-w"></div>
+          <div class="hint" id="code-expiry-w"></div>
+        </div>
+      </div>
+      <div class="wizard-block">
+        <h2>(B) Nhập mã của máy kia</h2>
+        <p class="hint">Dùng khi máy kia đã hiện mã: gõ địa chỉ và mã 6 số của máy đó vào đây (hoặc bấm vào tên máy trong mục “Máy ở gần đây” phía trên).</p>
+        <div class="form-row">
+          <label>Địa chỉ máy kia
+            <input id="dial-addr-w" type="text" placeholder="ví dụ 192.168.1.20:22000">
+          </label>
+          <label>Mã 6 số
+            <input id="dial-code-w" type="text" inputmode="numeric" placeholder="123456" maxlength="7">
+          </label>
+        </div>
+        <div class="row">
+          <button id="btn-dial-w" class="btn btn-primary">Ghép nối</button>
+        </div>
+        <div id="dial-err-w"></div>
+      </div>
+    </div>
+
+    <div id="wizard-pending" class="hidden">
+      <h2>Yêu cầu ghép đôi đang chờ duyệt</h2>
+      <div id="pending-body-w">Không có yêu cầu nào.</div>
+    </div>
+
+    <p class="wizard-skip"><a href="#" id="wizard-skip">Đã ghép nối rồi hoặc muốn xem trước? Vào trang quản lý</a></p>
+  </div>
+</section>
+
+<!-- ============================ ỨNG DỤNG ============================ -->
+<div id="app" class="hidden">
 <nav class="tabs" role="tablist">
-  <button data-tab="overview" class="tab active">Tổng quan</button>
+  <button data-tab="home" class="tab active">Trang chính</button>
   <button data-tab="peers" class="tab">Máy đã ghép đôi</button>
   <button data-tab="pairing" class="tab">Ghép đôi <span id="pending-count" class="count hidden"></span></button>
   <button data-tab="conflicts" class="tab">Xung đột <span id="conflict-count" class="count hidden"></span></button>
@@ -27,32 +83,61 @@
 </nav>
 
 <main>
-<!-- ============================ TỔNG QUAN ============================ -->
-<section id="tab-overview" class="panel active">
-  <div class="stat-grid" id="stat-grid">
-    <div class="card stat"><div class="stat-label">Trạng thái</div><div class="stat-value" id="stat-state">…</div></div>
-    <div class="card stat"><div class="stat-label">Số file đang đồng bộ</div><div class="stat-value" id="stat-files">…</div></div>
-    <div class="card stat"><div class="stat-label">Đã gửi</div><div class="stat-value" id="stat-sent">…</div></div>
-    <div class="card stat"><div class="stat-label">Đã nhận</div><div class="stat-value" id="stat-recv">…</div></div>
-    <div class="card stat"><div class="stat-label">Tốc độ hiện tại</div><div class="stat-value" id="stat-rate">…</div></div>
+<!-- ============================ TRANG CHÍNH ============================ -->
+<section id="tab-home" class="panel active">
+  <div id="offline-banner" class="offline-banner hidden"></div>
+
+  <div class="card drop-card">
+    <div id="dropzone" class="dropzone">
+      <div class="drop-title">Kéo file vào đây để chuyển sang máy kia</div>
+      <p class="hint">File thả vào sẽ được đưa vào thư mục đồng bộ của máy này rồi tự chuyển sang máy kia.
+      Nếu trùng tên, bản trên máy này sẽ bị ghi đè — bản cũ phía máy nhận vẫn được lưu trong lịch sử phiên bản.</p>
+      <div class="row">
+        <button id="btn-pick" class="btn btn-primary">Chọn file</button>
+        <button id="btn-pick-dir" class="btn">Chọn thư mục</button>
+        <input id="file-input" type="file" multiple class="hidden">
+        <input id="dir-input" type="file" webkitdirectory class="hidden">
+      </div>
+    </div>
+    <div id="upload-queue"></div>
   </div>
 
-  <div id="skip-warning" class="alert alert-warn hidden"></div>
-  <div id="queue-box"></div>
+  <div class="card" id="transfers-panel">
+    <h2>Đang chuyển</h2>
+    <div id="transfers-empty" class="hint">Hiện không có file nào đang chuyển.</div>
+    <h3 id="sending-title" class="hidden">Đang gửi ↑</h3>
+    <div id="sending-list"></div>
+    <h3 id="receiving-title" class="hidden">Đang nhận ↓</h3>
+    <div id="receiving-list"></div>
+  </div>
 
   <div class="grid-2">
     <div class="card">
-      <h2>Thiết bị này</h2>
-      <div id="overview-body">Đang tải trạng thái…</div>
+      <h2>File trong thư mục đồng bộ</h2>
+      <div id="home-files">Đang tải…</div>
     </div>
-    <div class="card">
-      <h2>Điều khiển đồng bộ</h2>
-      <p class="hint">Tạm dừng chỉ dừng việc đồng bộ — trang quản lý này vẫn hoạt động bình thường.</p>
-      <div class="row">
-        <button id="btn-pause" class="btn btn-warn">⏸ Tạm dừng đồng bộ</button>
-        <button id="btn-resume" class="btn btn-primary">▶ Tiếp tục đồng bộ</button>
+    <div>
+      <div class="stat-grid" id="stat-grid">
+        <div class="card stat"><div class="stat-label">Trạng thái</div><div class="stat-value" id="stat-state">…</div></div>
+        <div class="card stat"><div class="stat-label">Số file đang đồng bộ</div><div class="stat-value" id="stat-files">…</div></div>
+        <div class="card stat"><div class="stat-label">Đã gửi</div><div class="stat-value" id="stat-sent">…</div></div>
+        <div class="card stat"><div class="stat-label">Đã nhận</div><div class="stat-value" id="stat-recv">…</div></div>
+        <div class="card stat"><div class="stat-label">Tốc độ hiện tại</div><div class="stat-value" id="stat-rate">…</div></div>
       </div>
-      <div id="recent-errors"></div>
+      <div id="skip-warning" class="alert alert-warn hidden"></div>
+      <div class="card">
+        <h2>Thiết bị này</h2>
+        <div id="overview-body">Đang tải trạng thái…</div>
+      </div>
+      <div class="card">
+        <h2>Điều khiển đồng bộ</h2>
+        <p class="hint">Tạm dừng chỉ dừng việc đồng bộ — trang quản lý này vẫn hoạt động bình thường.</p>
+        <div class="row">
+          <button id="btn-pause" class="btn btn-warn">⏸ Tạm dừng đồng bộ</button>
+          <button id="btn-resume" class="btn">▶ Tiếp tục đồng bộ</button>
+        </div>
+        <div id="recent-errors"></div>
+      </div>
     </div>
   </div>
 </section>
@@ -64,21 +149,28 @@
 
 <!-- ============================ GHÉP ĐÔI ============================ -->
 <section id="tab-pairing" class="panel">
+  <div class="card">
+    <h2>Máy ở gần đây</h2>
+    <div id="nearby-list"></div>
+    <p class="hint" id="nearby-empty">Chưa thấy máy nào. Hãy mở FileSync trên máy kia và chắc chắn hai máy cùng một mạng Wi-Fi.</p>
+  </div>
   <div class="grid-2">
     <div class="card">
       <h2>Cho máy khác ghép với máy này</h2>
-      <p class="hint">Tạo mã 6 số rồi đọc mã cho người ở máy kia nhập vào. Mã có hiệu lực 5 phút; tạo mã mới sẽ thay thế hoàn toàn mã cũ.</p>
+      <p class="hint">Tạo mã 6 số rồi đọc địa chỉ và mã cho người ở máy kia nhập vào. Mã có hiệu lực 5 phút; tạo mã mới sẽ thay thế hoàn toàn mã cũ.</p>
       <div class="row">
         <button id="btn-code" class="btn btn-primary">Tạo mã ghép đôi</button>
       </div>
       <div id="code-display" class="code-box hidden">
+        <div class="hint">Địa chỉ của máy này:</div>
+        <div class="own-addr" id="own-addr">…</div>
         <div class="bigcode" id="code-value"></div>
         <div class="hint" id="code-expiry"></div>
       </div>
     </div>
     <div class="card">
       <h2>Ghép với một máy khác</h2>
-      <p class="hint">Nhập địa chỉ của máy kia (xem ở trang quản lý của máy đó, mục “Địa chỉ lắng nghe”) và mã 6 số máy kia vừa tạo.</p>
+      <p class="hint">Nhập địa chỉ của máy kia và mã 6 số máy kia vừa tạo — hoặc bấm vào tên máy trong mục “Máy ở gần đây” phía trên để điền sẵn địa chỉ.</p>
       <div class="form-row">
         <label>Địa chỉ máy kia
           <input id="dial-addr" type="text" placeholder="ví dụ 192.168.1.20:22000">
@@ -91,6 +183,7 @@
         <button id="btn-dial" class="btn btn-primary">Ghép đôi</button>
         <span id="dial-msg"></span>
       </div>
+      <div id="dial-err"></div>
     </div>
   </div>
 
@@ -121,9 +214,12 @@
   </div>
 </section>
 </main>
+</div>
 
-<footer class="app-footer">FileSync chỉ nghe trên máy này (127.0.0.1) — trang này không truy cập được từ máy khác.</footer>
+<footer class="app-footer"><div class="footer-inner">FileSync chỉ nghe trên máy này (127.0.0.1) — trang này không truy cập được từ máy khác.</div></footer>
 <div id="toasts" aria-live="polite"></div>
 <script src="app.js"></script>
+<script src="pairing.js"></script>
+<script src="upload.js"></script>
 </body>
 </html>
