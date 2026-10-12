@@ -229,7 +229,7 @@ func (m *Manager) HandleConn(ctx context.Context, c *transport.Conn) {
 		pair: PendingPair{
 			SessionID:   sessionID,
 			DeviceID:    initiatorID,
-			Name:        msg.Header.Name,
+			Name:        cleanPeerName(msg.Header.Name),
 			Fingerprint: c.Fingerprint(),
 		},
 		conn:     c,
@@ -282,7 +282,7 @@ func (m *Manager) DialPair(ctx context.Context, tm *transport.Manager, addr, cod
 		return fail(fmt.Errorf("pairing: unexpected %s in response to pair request", msg.Header.Type))
 	}
 	sessionID := msg.Header.SessionID
-	acceptorName := msg.Header.Name // from the challenge (job 009)
+	acceptorName := cleanPeerName(msg.Header.Name) // from the challenge (job 009)
 	nonceB, _ := base64.StdEncoding.DecodeString(msg.Header.Nonce)
 	nonceA, err := genNonce(lockedRand{m})
 	if err != nil {

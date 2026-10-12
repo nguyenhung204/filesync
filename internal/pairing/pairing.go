@@ -16,8 +16,11 @@ import (
 	"io"
 	"math/big"
 	"os"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"filesync/internal/identity"
 	"filesync/internal/logx"
@@ -126,6 +129,7 @@ func NewManager(id *identity.Identity, st *store.Store, log *logx.Logger, closer
 	if name == "" {
 		name = deviceName()
 	}
+	name = truncateDisplayName(name)
 	return &Manager{
 		id:      id,
 		st:      st,
@@ -304,6 +308,49 @@ func (m *Manager) currentEpoch() uint64 {
 // errNoSession is returned by confirm/reject for an unknown or dead
 // session id.
 var errNoSession = errors.New("pairing: unknown or expired session")
+
+// maxDisplayNameBytes mirrors the proto Header.Name limit (128
+// bytes). A longer local name would make every pairing frame
+// fail validation ("name too long") and break pairing outright
+// for a machine whose configured name is extreme (job 009
+// round-2 reviewer NIT, reproduced with a 200-byte name).
+const maxDisplayNameBytes = 128
+
+// truncateDisplayName cuts s to at most maxDisplayNameBytes
+// without splitting a UTF-8 rune: a name is cut at a rune
+// boundary, never mid-sequence.
+func truncateDisplayName(s string) string {
+	if len(s) <= maxDisplayNameBytes {
+		return s
+	}
+	cut := 0
+	for cut < len(s) {
+		_, w := utf8.DecodeRuneInString(s[cut:])
+		if cut+w > maxDisplayNameBytes {
+			break
+		}
+		cut += w
+	}
+	return s[:cut]
+}
+
+// cleanPeerName strips control and format (bidi etc.) characters
+// from a peer-supplied display name at the single point where a
+// wire name becomes a PendingPair: a hostile name could otherwise
+// smuggle ANSI escape sequences or line breaks into the terminal
+// that prints the confirm prompt and fake its output (job 009
+// round-2 security NIT). The fingerprint — never the name — is
+// the identity the user verifies, so dropping characters here is
+// safe. Both session sides use it, so the stored peer record
+// (written from the PendingPair) is clean as well.
+func cleanPeerName(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf) {
+			return -1
+		}
+		return r
+	}, s)
+}
 
 // deviceName is the fallback display name used when Options.Name
 // is empty: the OS hostname, like config.Default's device name.
