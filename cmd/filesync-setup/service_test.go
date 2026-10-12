@@ -260,6 +260,111 @@ func TestElevationCommandEvilPath(t *testing.T) {
 	}
 }
 
+const scQueryexStartPending = `
+SERVICE_NAME: FileSync 
+        TYPE               : 10  WIN32_OWN_PROCESS  
+        STATE              : 2  START_PENDING 
+                                (NOT_STOPPABLE, NOT_PAUSABLE, IGNORES_SHUTDOWN)
+        WIN32_EXIT_CODE    : 0  (0x0)
+        SERVICE_EXIT_CODE  : 0  (0x0)
+        CHECKPOINT         : 0x1
+        WAIT_HINT          : 0x7d0
+        PID                : 6724
+        FLAGS              :
+`
+
+const scQueryexStopped = `
+SERVICE_NAME: FileSync 
+        TYPE               : 10  WIN32_OWN_PROCESS  
+        STATE              : 1  STOPPED 
+        WIN32_EXIT_CODE    : 0  (0x0)
+        SERVICE_EXIT_CODE  : 0  (0x0)
+        CHECKPOINT         : 0x0
+        WAIT_HINT          : 0x0
+        PID                : 0
+        FLAGS              :
+`
+
+func TestParseScQueryexPID(t *testing.T) {
+	cases := []struct {
+		name   string
+		in     string
+		want   int
+		wantOK bool
+	}{
+		{"wedged service with process", scQueryexStartPending, 6724, true},
+		{"stopped service has pid 0", scQueryexStopped, 0, true},
+		{"not installed (1060)", scQueryNotInstalled, 0, false},
+		{"query without ex has no pid line", scQueryRunning, 0, false},
+		{"garbage", "blah blah\nnothing useful\n", 0, false},
+		{"empty", "", 0, false},
+		{"pid not a number", "        PID                : abc\n", 0, false},
+		{"pid line without colon", "        PID                6724\n", 0, false},
+	}
+	for _, c := range cases {
+		got, ok := parseScQueryexPID(c.in)
+		if got != c.want || ok != c.wantOK {
+			t.Errorf("%s: parseScQueryexPID = (%d, %v), want (%d, %v)", c.name, got, ok, c.want, c.wantOK)
+		}
+	}
+	if got := scQueryexArgs(); len(got) != 2 || got[0] != "queryex" || got[1] != "FileSync" {
+		t.Errorf("scQueryexArgs = %v", got)
+	}
+}
+
+func TestStuckAction(t *testing.T) {
+	cases := []struct {
+		state string
+		want  stuckDecision
+	}{
+		{"STOPPED", stuckProceed},
+		{"START_PENDING", stuckKillThenDelete},
+		{"STOP_PENDING", stuckKillThenDelete},
+		{"PAUSE_PENDING", stuckKillThenDelete},
+		{"CONTINUE_PENDING", stuckKillThenDelete},
+		{"RUNNING", stuckFail},
+		{"PAUSED", stuckFail},
+		{"NOT_INSTALLED", stuckFail},
+		{"UNKNOWN", stuckFail},
+		{"", stuckFail},
+	}
+	for _, c := range cases {
+		if got := stuckAction(c.state); got != c.want {
+			t.Errorf("stuckAction(%q) = %v, want %v", c.state, got, c.want)
+		}
+	}
+}
+
+func TestTaskkillArgs(t *testing.T) {
+	got := taskkillArgs(6724)
+	want := []string{"/PID", "6724", "/F"}
+	if len(got) != len(want) {
+		t.Fatalf("taskkillArgs = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("taskkillArgs[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// The setup-side copy of the QuickEdit bit math (D5): same
+// contract as the internal/cli copy — 0x40 cleared, 0x80 set,
+// every other bit preserved.
+func TestConsoleModeWithoutQuickEditSetupCopy(t *testing.T) {
+	cases := []struct{ in, want uint32 }{
+		{0x01E7, 0x01A7},
+		{0x0040, 0x0080},
+		{0x0000, 0x0080},
+		{0xFFFF, 0xFFFF &^ 0x0040},
+	}
+	for _, c := range cases {
+		if got := consoleModeWithoutQuickEdit(c.in); got != c.want {
+			t.Errorf("consoleModeWithoutQuickEdit(%#04x) = %#04x, want %#04x", c.in, got, c.want)
+		}
+	}
+}
+
 func TestShortcutCommand(t *testing.T) {
 	p := computePaths(`C:\Users\O'Neil\AppData\Local`, `C:\Users\O'Neil\AppData\Roaming`)
 	cmd := shortcutCommand(p)

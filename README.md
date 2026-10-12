@@ -97,6 +97,18 @@ writes to or deletes your config dir (`%APPDATA%\filesync`, which
 holds your device identity) or your sync folder, and `init` is
 idempotent, so your device ID survives upgrades.
 
+**Version 0.2.1 fix:** in 0.2.0 the daemon did not speak the
+Windows service protocol, so the FileSync service could wedge in
+START_PENDING forever and a reinstall then failed while trying to
+stop the old service. 0.2.1 makes the daemon a real Windows
+service (it reports RUNNING/STOPPED to the Service Control
+Manager and shuts down gracefully on stop), and the 0.2.1
+installer recognises a wedged pending-state service from an
+older install, terminates exactly that service's own process,
+and then upgrades normally. If you installed 0.2.0, just run the
+0.2.1 `FileSync-Setup.exe` over it — config and data are kept as
+with every upgrade.
+
 Note: the installer is not code-signed yet, so Windows SmartScreen
 may ask once on first run — choose *More info > Run anyway*.
 
@@ -289,10 +301,13 @@ listen address.
   changing in the exact microsecond it is being installed can
   need an extra round to converge; no data loss — closing it
   needs descriptor-based no-follow APIs).
-- Windows/macOS service packaging and locked-file classification
-  are **cross-compiled and code-reviewed, not run on real
-  hardware** in the development environment. On Windows, the
-  single-instance check cannot distinguish PID reuse.
+- macOS service packaging is **cross-compiled and code-reviewed,
+  not run on real hardware** in the development environment. The
+  Windows installer and service were run on a real machine
+  (which is how the 0.2.0 START_PENDING service bug, fixed in
+  0.2.1, was found); locked-file classification remains
+  cross-compiled only. On Windows, the single-instance check
+  cannot distinguish PID reuse.
 - The **full index is exchanged every round** (D11): trees far
   beyond the verified 10k files will pay index bandwidth per
   round. One round's index is also capped (1M entries / 256 MiB

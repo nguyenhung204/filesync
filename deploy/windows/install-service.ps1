@@ -31,10 +31,65 @@ $binPath = "`"$BinaryPath`" serve --config-dir `"$ConfigDir`""
 $existing = Get-Service -Name FileSync -ErrorAction SilentlyContinue
 if ($existing) {
     Write-Host "FileSync service already exists; stopping and reconfiguring it."
-    Stop-Service -Name FileSync -Force -ErrorAction SilentlyContinue
+    sc.exe stop FileSync | Out-Null
+    $stopExit = $LASTEXITCODE
+    # $stopExit is deliberately only read, not gated on: stop fails
+    # when the service is not running. The state poll below is the
+    # authoritative gate (same pattern as the Go installer).
+    $lastStatus = "$($existing.Status)"
+    $deadline = (Get-Date).AddSeconds(15)
+    do {
+        $svcNow = Get-Service -Name FileSync -ErrorAction SilentlyContinue
+        if (-not $svcNow) { $lastStatus = "Stopped"; break }
+        $lastStatus = "$($svcNow.Status)"
+        if ($lastStatus -eq "Stopped") { break }
+        Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+
+    $pendingStates = @("StartPending", "StopPending", "PausePending", "ContinuePending")
+    if (($lastStatus -ne "Stopped") -and ($pendingStates -contains $lastStatus)) {
+        # Wedged in a pending state: the 0.2.0 service process never
+        # speaks SCM, so it ignores stop forever. Kill exactly the
+        # process sc.exe queryex attributes to this service, never
+        # any other PID (same fallback as the Go installer).
+        $queryex = sc.exe queryex FileSync
+        $queryexExit = $LASTEXITCODE
+        $svcPid = 0
+        if ($queryexExit -eq 0) {
+            foreach ($line in $queryex) {
+                if ($line -match "PID\s*:\s*(\d+)") { $svcPid = [int]$Matches[1] }
+            }
+        }
+        if ($svcPid -gt 0) {
+            Write-Host "FileSync service is stuck in state $lastStatus; killing its own process (PID $svcPid)."
+            taskkill.exe /PID $svcPid /F | Out-Null
+            if ($LASTEXITCODE -ne 0) { Write-Error "taskkill failed ($LASTEXITCODE)"; exit 1 }
+            $deadline = (Get-Date).AddSeconds(5)
+            do {
+                $svcNow = Get-Service -Name FileSync -ErrorAction SilentlyContinue
+                if (-not $svcNow) { $lastStatus = "Stopped"; break }
+                $lastStatus = "$($svcNow.Status)"
+                if ($lastStatus -eq "Stopped") { break }
+                Start-Sleep -Milliseconds 500
+            } while ((Get-Date) -lt $deadline)
+        }
+    }
+
+    if ($lastStatus -ne "Stopped") {
+        Write-Error "FileSync service did not stop within the timeout (last status: $lastStatus)."
+        exit 1
+    }
     sc.exe delete FileSync | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Error "sc.exe delete failed ($LASTEXITCODE)"; exit 1 }
-    Start-Sleep -Seconds 1
+
+    # Do not recreate until the old service is really gone.
+    $deadline = (Get-Date).AddSeconds(15)
+    do {
+        $svcNow = Get-Service -Name FileSync -ErrorAction SilentlyContinue
+        if (-not $svcNow) { break }
+        Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+    if ($svcNow) { Write-Error "FileSync service still exists 15 seconds after sc.exe delete."; exit 1 }
 }
 
 sc.exe create FileSync binPath= $binPath start= auto DisplayName= "FileSync"

@@ -9,7 +9,7 @@ import (
 )
 
 // version is overridable at build time via -ldflags -X main.version.
-var version = "0.2.0"
+var version = "0.2.1"
 
 func main() {
 	cli.Version = version
