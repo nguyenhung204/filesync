@@ -77,3 +77,33 @@ func TestServeConfigDirAfterSubcommand(t *testing.T) {
 		t.Fatalf("bare --config-dir: rc=%d stderr=%q, want a clear flag error", rc, errs)
 	}
 }
+
+// Added by reviewer-test (round 1): build.md states the serve-level
+// flag overrides the global one, but nothing pinned that down. Two
+// corrupt config dirs make the winner observable without ever
+// starting a daemon: the load error must name the serve-level dir.
+func TestServeConfigDirOverridesGlobal(t *testing.T) {
+	mkBad := func() string {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("{not json"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	globalDir, serveDir := mkBad(), mkBad()
+	forms := map[string][]string{
+		"space form":  {"--config-dir", globalDir, "serve", "--config-dir", serveDir},
+		"equals form": {"--config-dir", globalDir, "serve", "--config-dir=" + serveDir},
+	}
+	for name, args := range forms {
+		_, errs, rc := runCLI(t, "", args...)
+		want := filepath.Join(serveDir, "config.json")
+		if rc == 0 || !strings.Contains(errs, want) {
+			t.Errorf("%s: rc=%d stderr=%q, want a load failure naming %s (serve-level must win)",
+				name, rc, errs, want)
+		}
+		if strings.Contains(errs, filepath.Join(globalDir, "config.json")) {
+			t.Errorf("%s: stderr names the global dir %s — serve-level flag did not win", name, globalDir)
+		}
+	}
+}
