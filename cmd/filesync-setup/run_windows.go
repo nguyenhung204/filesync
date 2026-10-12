@@ -76,12 +76,9 @@ var (
 )
 
 // setConsoleUTF8 switches the console to UTF-8 (code page
-// 65001) before ANY output (job 009 round 2: the user asked
-// "chữ phải có dấu chứ?" — full Vietnamese diacritics). The
-// all-ASCII text of earlier versions existed only because the
-// console codepage was never set, so diacritics would have
-// rendered as mojibake; with 65001 set first, the proper text
-// below displays correctly. Best effort: a console-less or
+// 65001) before ANY output (job 009 round 2: full Vietnamese
+// diacritics — the earlier all-ASCII text existed only because
+// the codepage was never set). Best effort: a console-less or
 // redirected process simply keeps its current codepage.
 func setConsoleUTF8() {
 	_, _, _ = procSetConsoleOutputCP.Call(65001)
