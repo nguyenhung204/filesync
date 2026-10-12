@@ -67,6 +67,106 @@ func TestSvcElevationPayloadEvilPath(t *testing.T) {
 	}
 }
 
+const svcQueryexStartPending = `
+SERVICE_NAME: FileSync 
+        TYPE               : 10  WIN32_OWN_PROCESS  
+        STATE              : 2  START_PENDING 
+        WIN32_EXIT_CODE    : 0  (0x0)
+        CHECKPOINT         : 0x1
+        WAIT_HINT          : 0x7d0
+        PID                : 6724
+        FLAGS              :
+`
+
+const svcQueryexStopped = `
+SERVICE_NAME: FileSync 
+        TYPE               : 10  WIN32_OWN_PROCESS  
+        STATE              : 1  STOPPED 
+        WIN32_EXIT_CODE    : 0  (0x0)
+        CHECKPOINT         : 0x0
+        WAIT_HINT          : 0x0
+        PID                : 0
+        FLAGS              :
+`
+
+const svcQueryNotInstalled = `[SC] QueryService FAILED 1060:
+
+The specified service does not exist as an installed service.
+`
+
+// The CLI-side copies of the D4 helpers must behave exactly
+// like the cmd/filesync-setup originals.
+func TestSvcParseScQueryState(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"start pending", svcQueryexStartPending, "START_PENDING"},
+		{"stopped", svcQueryexStopped, "STOPPED"},
+		{"not installed", svcQueryNotInstalled, "NOT_INSTALLED"},
+		{"garbage", "blah\n", "UNKNOWN"},
+		{"empty", "", "UNKNOWN"},
+	}
+	for _, c := range cases {
+		if got := svcParseScQueryState(c.in); got != c.want {
+			t.Errorf("%s: svcParseScQueryState = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestSvcParseScQueryexPID(t *testing.T) {
+	cases := []struct {
+		name   string
+		in     string
+		want   int
+		wantOK bool
+	}{
+		{"wedged service with process", svcQueryexStartPending, 6724, true},
+		{"stopped service has pid 0", svcQueryexStopped, 0, true},
+		{"not installed (1060)", svcQueryNotInstalled, 0, false},
+		{"garbage", "blah blah\n", 0, false},
+		{"pid not a number", "        PID                : abc\n", 0, false},
+	}
+	for _, c := range cases {
+		got, ok := svcParseScQueryexPID(c.in)
+		if got != c.want || ok != c.wantOK {
+			t.Errorf("%s: svcParseScQueryexPID = (%d, %v), want (%d, %v)", c.name, got, ok, c.want, c.wantOK)
+		}
+	}
+}
+
+func TestSvcStuckAction(t *testing.T) {
+	cases := []struct {
+		state string
+		want  svcStuckDecision
+	}{
+		{"STOPPED", svcStuckProceed},
+		{"START_PENDING", svcStuckKillThenDelete},
+		{"STOP_PENDING", svcStuckKillThenDelete},
+		{"PAUSE_PENDING", svcStuckKillThenDelete},
+		{"CONTINUE_PENDING", svcStuckKillThenDelete},
+		{"RUNNING", svcStuckFail},
+		{"PAUSED", svcStuckFail},
+		{"UNKNOWN", svcStuckFail},
+		{"", svcStuckFail},
+	}
+	for _, c := range cases {
+		if got := svcStuckAction(c.state); got != c.want {
+			t.Errorf("svcStuckAction(%q) = %v, want %v", c.state, got, c.want)
+		}
+	}
+}
+
+func TestSvcTaskkillArgs(t *testing.T) {
+	got := svcTaskkillArgs(6724)
+	want := []string{"/PID", "6724", "/F"}
+	if len(got) != len(want) {
+		t.Fatalf("svcTaskkillArgs = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("svcTaskkillArgs[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestSvcPsQuote(t *testing.T) {
 	if got := svcPsQuote("a'b"); got != `'a''b'` {
 		t.Errorf("svcPsQuote = %q", got)

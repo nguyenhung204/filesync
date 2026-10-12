@@ -101,9 +101,24 @@ func svcDoUninstall(e *env) int {
 		return 0
 	}
 	// Stop first; ignore its exit code (it errors when the
-	// service is not running), then delete with a hard check,
-	// exactly like uninstall-service.ps1.
+	// service is not running) — the STOPPED poll below is the
+	// real gate, exactly like uninstall-service.ps1.
 	_ = svcRun("sc.exe", "stop", "FileSync")
+	state, stopped := svcPollState("STOPPED", 15*time.Second)
+	if !stopped {
+		if svcStuckAction(state) != svcStuckKillThenDelete {
+			fmt.Fprintf(e.stdout, "[LOI] Service chua dung han sau 15 giay (trang thai cuoi: %s).\n", state)
+			return 1
+		}
+		// The 0.2.0 bug (spec D4): a service whose process
+		// never speaks SCM wedges in a *_PENDING state forever
+		// and ignores stop. Kill exactly the process queryex
+		// attributes to THIS service — never any other PID.
+		if !svcKillServiceProcess(e, state) || !svcWaitStoppedOrGone(5*time.Second) {
+			fmt.Fprintln(e.stdout, "[LOI] Khong tat duoc tien trinh cua service dang treo.")
+			return 1
+		}
+	}
 	res := svcRun("sc.exe", "delete", "FileSync")
 	if res.code != 0 {
 		fmt.Fprintf(e.stdout, "[LOI] sc.exe delete tra ma %d: %s\n", res.code, res.output)
@@ -130,6 +145,57 @@ func svcDoUninstall(e *env) int {
 	fmt.Fprintf(e.stdout, "Muon xoa han, hay xoa thu muc cai dat %s va thu muc cau hinh %s.\n",
 		installDir, e.configDir)
 	return 0
+}
+
+// svcPollState polls `sc query` every 500ms until the state
+// equals want or the timeout passes; it returns the last seen
+// state.
+func svcPollState(want string, timeout time.Duration) (string, bool) {
+	deadline := time.Now().Add(timeout)
+	last := "UNKNOWN"
+	for {
+		res := svcRun("sc.exe", "query", svcServiceName)
+		last = svcParseScQueryState(res.output)
+		if last == want {
+			return last, true
+		}
+		if time.Now().After(deadline) {
+			return last, false
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// svcKillServiceProcess force-kills the process that
+// `sc.exe queryex` attributes to the FileSync service and
+// reports whether taskkill succeeded. A missing or zero PID
+// means there is no process to kill — a failure here, since
+// the caller only invokes this for a wedged *_PENDING service.
+func svcKillServiceProcess(e *env, state string) bool {
+	res := svcRun("sc.exe", "queryex", svcServiceName)
+	pid, ok := svcParseScQueryexPID(res.output)
+	if !ok || pid <= 0 {
+		return false
+	}
+	fmt.Fprintf(e.stdout, "Service dang treo o trang thai %s; dang tat tien trinh cua service (PID %d)...\n", state, pid)
+	return svcRun("taskkill", svcTaskkillArgs(pid)...).code == 0
+}
+
+// svcWaitStoppedOrGone polls until the service reports
+// STOPPED or disappears entirely (after a kill the SCM entry
+// can vanish together with the process).
+func svcWaitStoppedOrGone(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		res := svcRun("sc.exe", "query", svcServiceName)
+		if res.code != 0 || svcParseScQueryState(res.output) == "STOPPED" {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 // svcPollGone polls `sc query` until the service is gone (exit

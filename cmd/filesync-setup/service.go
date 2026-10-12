@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -221,4 +222,80 @@ func regAddCommands(p paths) [][]string {
 // (used by `filesync uninstall-service`).
 func regDeleteUninstallArgs() []string {
 	return []string{"delete", uninstallKey, "/f"}
+}
+
+// scQueryexArgs returns argv for `sc.exe queryex FileSync`: the
+// query output plus the PID of the service's own process.
+func scQueryexArgs() []string { return []string{"queryex", ServiceName} }
+
+// parseScQueryexPID extracts the service process PID from
+// `sc.exe queryex` output, e.g. the line
+// "        PID                : 6724". ok is false when the
+// output carries no parseable PID line (the 1060 error output,
+// garbage). A PID of 0 parses with ok=true and means the
+// service has no process.
+func parseScQueryexPID(output string) (pid int, ok bool) {
+	for _, line := range strings.Split(output, "\n") {
+		i := strings.Index(line, "PID")
+		if i < 0 {
+			continue
+		}
+		rest := line[i+len("PID"):]
+		colon := strings.Index(rest, ":")
+		if colon < 0 {
+			continue
+		}
+		fields := strings.Fields(rest[colon+1:])
+		if len(fields) == 0 {
+			continue
+		}
+		n, err := strconv.Atoi(fields[0])
+		if err != nil {
+			continue
+		}
+		return n, true
+	}
+	return 0, false
+}
+
+// taskkillArgs returns argv for force-killing exactly one
+// process by PID: taskkill /PID <pid> /F.
+func taskkillArgs(pid int) []string {
+	return []string{"/PID", strconv.Itoa(pid), "/F"}
+}
+
+// stuckDecision is what to do when a pre-existing service did
+// not reach STOPPED inside the stop timeout.
+type stuckDecision int
+
+const (
+	stuckProceed stuckDecision = iota // already STOPPED: carry on to delete
+	stuckKillThenDelete               // wedged *_PENDING: kill its process, then delete
+	stuckFail                         // anything else: fail as before, hands off
+)
+
+// stuckAction decides from the last observed service state
+// (job 008 spec D4). The kill branch is reserved for the
+// *_PENDING family: a service whose process never speaks SCM
+// wedges in one of those states forever and ignores stop —
+// exactly the 0.2.0 START_PENDING bug found on a real machine.
+func stuckAction(state string) stuckDecision {
+	switch state {
+	case "STOPPED":
+		return stuckProceed
+	case "START_PENDING", "STOP_PENDING", "PAUSE_PENDING", "CONTINUE_PENDING":
+		return stuckKillThenDelete
+	default:
+		return stuckFail
+	}
+}
+
+// consoleModeWithoutQuickEdit mirrors the helper in
+// internal/cli (serve_scm.go): QuickEdit bit cleared,
+// extended-flags bit set, every other bit preserved. It is a
+// deliberate small copy next to this binary's own kernel32
+// calls — package main cannot import internal/cli (the
+// psQuote duplication precedent from job 007).
+func consoleModeWithoutQuickEdit(mode uint32) uint32 {
+	return (mode | 0x0080) &^ 0x0040
 }

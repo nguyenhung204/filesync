@@ -9,7 +9,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
+	"unsafe"
 )
 
 // The Windows install flow (spec D3). Every external command goes
@@ -64,8 +66,37 @@ func fail(step, detail string) int {
 	return 1
 }
 
+var (
+	kernel32DLL        = syscall.NewLazyDLL("kernel32.dll")
+	procGetStdHandle   = kernel32DLL.NewProc("GetStdHandle")
+	procGetConsoleMode = kernel32DLL.NewProc("GetConsoleMode")
+	procSetConsoleMode = kernel32DLL.NewProc("SetConsoleMode")
+)
+
+// disableConsoleQuickEdit turns off console QuickEdit before
+// anything else runs (spec D5): in QuickEdit "Select" state a
+// click into the window freezes the process, which hung this
+// very installer on a real machine. Best effort: any failure
+// (no console attached, redirected stdio) is silent.
+func disableConsoleQuickEdit() {
+	// STD_INPUT_HANDLE is -10; written as a complement because
+	// a negative constant cannot convert to uintptr.
+	handle, _, _ := procGetStdHandle.Call(^uintptr(9))
+	if handle == 0 || handle == ^uintptr(0) {
+		return
+	}
+	var mode uint32
+	r1, _, _ := procGetConsoleMode.Call(handle, uintptr(unsafe.Pointer(&mode)))
+	if r1 == 0 {
+		return
+	}
+	r1, _, _ = procSetConsoleMode.Call(handle, uintptr(consoleModeWithoutQuickEdit(mode)))
+	_ = r1 // best effort: a failed mode set must not block the install
+}
+
 // run is the installer entry point.
 func run() int {
+	disableConsoleQuickEdit()
 	if !isAdmin() {
 		if hasArg(os.Args[1:], "--elevated") {
 			// Already relaunched once and still not admin: do
@@ -158,9 +189,24 @@ func removeOldService() int {
 	// Ignore stop's own exit code: it errors when the service is
 	// already stopped; the STOPPED poll below is the real gate.
 	_ = runCmd("sc.exe", scStopArgs()...)
-	if state, ok := pollState("STOPPED", 15*time.Second); !ok {
-		return fail("Dung service cu",
-			"service cu chua dung han sau 15 giay (trang thai cuoi: "+state+")")
+	state, stopped := pollState("STOPPED", 15*time.Second)
+	if !stopped {
+		if stuckAction(state) != stuckKillThenDelete {
+			return fail("Dung service cu",
+				"service cu chua dung han sau 15 giay (trang thai cuoi: "+state+")")
+		}
+		// The 0.2.0 bug (spec D4): a service whose process never
+		// speaks SCM wedges in a *_PENDING state forever and
+		// ignores stop, so a plain timeout would fail every
+		// upgrade. Kill exactly the process queryex attributes
+		// to THIS service — never any other PID — then proceed.
+		if !killServiceProcess(state) {
+			return fail("Dung service cu",
+				"service cu dang treo o trang thai "+state+" va khong tat duoc tien trinh cua no")
+		}
+		if !waitStoppedOrGone(5 * time.Second) {
+			return fail("Dung service cu", "tien trinh service cu van chua dung sau khi bi tat")
+		}
 	}
 	res := runCmd("sc.exe", scDeleteArgs()...)
 	if res.code != 0 {
@@ -265,6 +311,38 @@ func pollState(want string, timeout time.Duration) (string, bool) {
 		}
 		if time.Now().After(deadline) {
 			return last, false
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// killServiceProcess force-kills the process that
+// `sc.exe queryex` attributes to the FileSync service and
+// reports whether taskkill succeeded. A missing or zero PID
+// means there is no process to kill, which is a failure here:
+// the caller only invokes this for a wedged *_PENDING service.
+func killServiceProcess(state string) bool {
+	res := runCmd("sc.exe", scQueryexArgs()...)
+	pid, ok := parseScQueryexPID(res.output)
+	if !ok || pid <= 0 {
+		return false
+	}
+	fmt.Printf("Service cu dang treo o trang thai %s; dang tat tien trinh cua service (PID %d)...\n", state, pid)
+	return runCmd("taskkill", taskkillArgs(pid)...).code == 0
+}
+
+// waitStoppedOrGone polls until the service reports STOPPED
+// or disappears entirely (after a kill the SCM entry can
+// vanish together with the process).
+func waitStoppedOrGone(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		res := runCmd("sc.exe", scQueryArgs()...)
+		if res.code != 0 || parseScQueryState(res.output) == "STOPPED" {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
