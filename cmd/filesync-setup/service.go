@@ -236,11 +236,14 @@ func scQueryexArgs() []string { return []string{"queryex", ServiceName} }
 // service has no process.
 func parseScQueryexPID(output string) (pid int, ok bool) {
 	for _, line := range strings.Split(output, "\n") {
-		i := strings.Index(line, "PID")
-		if i < 0 {
+		// Anchored at the line start (after indent): a stray
+		// "PID" inside another line's text must never be read
+		// as the service PID (job 008 approver NIT 2).
+		trimmed := strings.TrimLeft(line, " \t")
+		if !strings.HasPrefix(trimmed, "PID") {
 			continue
 		}
-		rest := line[i+len("PID"):]
+		rest := trimmed[len("PID"):]
 		colon := strings.Index(rest, ":")
 		if colon < 0 {
 			continue

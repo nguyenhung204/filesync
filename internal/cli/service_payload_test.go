@@ -123,6 +123,8 @@ func TestSvcParseScQueryexPID(t *testing.T) {
 		{"not installed (1060)", svcQueryNotInstalled, 0, false},
 		{"garbage", "blah blah\n", 0, false},
 		{"pid not a number", "        PID                : abc\n", 0, false},
+		{"mid-line PID is not the field", "        FLAGS              : PID : 999\n", 0, false},
+		{"decoy line before real pid", "        SOME_PID           : 999\n        PID                : 6724\n", 6724, true},
 	}
 	for _, c := range cases {
 		got, ok := svcParseScQueryexPID(c.in)
