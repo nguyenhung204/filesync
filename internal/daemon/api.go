@@ -65,6 +65,19 @@ func (d *Daemon) startWebUI(ctx context.Context, wg *sync.WaitGroup) {
 // Overview maps the daemon Status 1:1 onto the UI view.
 func (d *Daemon) Overview() webui.StatusView {
 	st := d.Status()
+	// LANAddrs is computed per call (cheap, and correct after the
+	// machine changes networks) from the live interface list.
+	port := listenPort(d.cfg.ListenAddr)
+	if lp := listenPort(st.ListenAddr); lp != "" {
+		port = lp
+	}
+	discovered := make([]webui.DiscoveredView, 0, len(st.Discovered))
+	for _, dev := range st.Discovered {
+		discovered = append(discovered, webui.DiscoveredView{
+			DeviceID: dev.DeviceID, Name: dev.Name,
+			Addr: dev.Addr, LastSeen: dev.LastSeenUnixNano,
+		})
+	}
 	return webui.StatusView{
 		Version: st.Version, State: st.State, PID: st.PID,
 		DeviceID: st.DeviceID, DeviceName: st.DeviceName,
@@ -73,6 +86,8 @@ func (d *Daemon) Overview() webui.StatusView {
 		StartedAt: st.StartedAt, UpdatedAt: st.UpdatedAt,
 		Paused: st.Paused, IndexedFiles: st.IndexedFiles,
 		InitialScanMs: st.InitialScanMs, Queue: st.Queue,
+		Sends: st.Sends, Discovered: discovered,
+		LANAddrs:  lanDialAddrs(interfaceIPs(), port),
 		BytesSent: st.BytesSent, BytesReceived: st.BytesReceived,
 		RateBps: st.RateBps, Rounds: st.Rounds,
 		LastError: st.LastError, RecentErrors: st.RecentErrors,

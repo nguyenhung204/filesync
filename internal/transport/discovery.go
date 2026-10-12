@@ -21,6 +21,11 @@ type Candidate struct {
 	DeviceID string // from TXT "id"
 	Name     string // from TXT "name"
 	Addr     string // "host:port", IPv4 preferred
+	// LastSeenUnixNano is when this record was last announced,
+	// filled in by the discovery snapshot (Candidates); the raw
+	// record conversion leaves it 0. Display-only (job 009
+	// addendum: the "nearby machines" list).
+	LastSeenUnixNano int64
 }
 
 // Discovery finds peer endpoints. Static addressing does not go

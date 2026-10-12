@@ -124,7 +124,9 @@ func (d *mdnsDiscovery) Candidates() []Candidate {
 			delete(d.cache, id)
 			continue
 		}
-		out = append(out, e.cand)
+		cand := e.cand
+		cand.LastSeenUnixNano = e.seen.UnixNano()
+		out = append(out, cand)
 	}
 	return out
 }
