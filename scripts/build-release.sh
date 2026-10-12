@@ -63,6 +63,19 @@ if [ "$MAGIC" != "MZ" ] || [ "$SIZE" -le 1048576 ]; then
 fi
 echo "embedded payload: $SIZE bytes, MZ ok"
 
+# Assert the installer's brand icon slot (job 009 spec D2): a
+# real ICO starts 00 00 01 00 and the committed multi-size file
+# is well over 10 KiB. A missing/truncated icon must fail the
+# packaging, never ship silently.
+ICON="cmd/filesync-setup/assets/filesync.ico"
+ICON_MAGIC=$(dd if="$ICON" bs=4 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
+ICON_SIZE=$(wc -c < "$ICON" | tr -d ' ')
+if [ "$ICON_MAGIC" != "00000100" ] || [ "$ICON_SIZE" -le 10240 ]; then
+    echo "build-release: installer icon failed ICO assert (magic=$ICON_MAGIC size=$ICON_SIZE)" >&2
+    exit 1
+fi
+echo "installer icon: $ICON_SIZE bytes, ICO magic ok"
+
 # --- Build the installer and the loose Windows daemon ------------
 GOOS=windows GOARCH=amd64 go build -trimpath -o dist/FileSync-Setup.exe ./cmd/filesync-setup
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -o dist/filesync.exe ./cmd/filesync

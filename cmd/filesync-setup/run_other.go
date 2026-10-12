@@ -8,6 +8,6 @@ import "fmt"
 // makes sense on Windows, but the package must still compile and
 // fail loudly everywhere else (pattern of internal/cli stubs).
 func run() int {
-	fmt.Println("FileSync-Setup chi chay tren Windows.")
+	fmt.Println("FileSync-Setup chỉ chạy trên Windows.")
 	return 1
 }

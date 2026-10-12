@@ -81,11 +81,14 @@ func svcParseScQueryState(output string) string {
 // has no process.
 func svcParseScQueryexPID(output string) (pid int, ok bool) {
 	for _, line := range strings.Split(output, "\n") {
-		i := strings.Index(line, "PID")
-		if i < 0 {
+		// Anchored at the line start (after indent): a stray
+		// "PID" inside another line's text must never be read
+		// as the service PID (job 008 approver NIT 2).
+		trimmed := strings.TrimLeft(line, " \t")
+		if !strings.HasPrefix(trimmed, "PID") {
 			continue
 		}
-		rest := line[i+len("PID"):]
+		rest := trimmed[len("PID"):]
 		colon := strings.Index(rest, ":")
 		if colon < 0 {
 			continue
@@ -103,6 +106,36 @@ func svcParseScQueryexPID(output string) (pid int, ok bool) {
 	return 0, false
 }
 
+// svcDesktopShortcutRemoveCommand builds the PowerShell
+// -Command payload that removes the Desktop shortcut FileSync
+// (job 009 spec D1). The Desktop folder is resolved by
+// PowerShell ([Environment]::GetFolderPath) because it may be
+// redirected (OneDrive) — the same idiom the installer uses to
+// create it. Removal is best-effort by design (SilentlyContinue);
+// there is no path interpolation at all in this payload.
+func svcDesktopShortcutRemoveCommand() string {
+	return `$desk = [Environment]::GetFolderPath('Desktop'); ` +
+		`if ($desk) { Remove-Item (Join-Path $desk 'FileSync.lnk') -Force -ErrorAction SilentlyContinue }`
+}
+
+// The FileSync firewall rule names (job 009 addendum). They
+// mirror firewallRuleTCP/UDP in cmd/filesync-setup/service.go —
+// deliberate copies again (package main cannot be imported),
+// kept identical on purpose so install/uninstall stay symmetric.
+const (
+	svcFirewallRuleTCP = "FileSync (TCP 22000)"
+	svcFirewallRuleUDP = "FileSync (UDP 5353)"
+)
+
+// svcFirewallDeleteCommands returns netsh argv pairs removing
+// both FileSync inbound rules at uninstall.
+func svcFirewallDeleteCommands() [][]string {
+	del := func(name string) []string {
+		return []string{"advfirewall", "firewall", "delete", "rule", "name=" + name}
+	}
+	return [][]string{del(svcFirewallRuleTCP), del(svcFirewallRuleUDP)}
+}
+
 // svcTaskkillArgs returns argv for force-killing exactly one
 // process by PID: taskkill /PID <pid> /F.
 func svcTaskkillArgs(pid int) []string {
@@ -114,9 +147,9 @@ func svcTaskkillArgs(pid int) []string {
 type svcStuckDecision int
 
 const (
-	svcStuckProceed svcStuckDecision = iota // already STOPPED: carry on
-	svcStuckKillThenDelete                  // wedged *_PENDING: kill its process, then delete
-	svcStuckFail                            // anything else: fail, hands off
+	svcStuckProceed        svcStuckDecision = iota // already STOPPED: carry on
+	svcStuckKillThenDelete                         // wedged *_PENDING: kill its process, then delete
+	svcStuckFail                                   // anything else: fail, hands off
 )
 
 // svcStuckAction decides from the last observed service

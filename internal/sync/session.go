@@ -214,7 +214,7 @@ func (e *Engine) RunSession(ctx context.Context, conn SessionConn) error {
 			e.recordError(conn.PeerID(), en.Path, "bad_remote_path", verr.Error())
 			continue
 		}
-		if isMetaTreePath(en.Path) {
+		if IsMetaTreePath(en.Path) {
 			// The path is syntactically valid but points into
 			// our own metadata tree (.filesync/versions, trash,
 			// partial): a peer planting files there would forge

@@ -98,12 +98,25 @@ type uiClient struct {
 func waitUI(t *testing.T, td *testDaemon) *uiClient {
 	t.Helper()
 	port := td.cfg.EffectiveUIPort()
-	token, err := webui.ReadToken(td.cfg.ConfigDir)
-	if err != nil {
-		t.Fatalf("read UI token: %v", err)
+	// The token file appears when the web UI goroutine starts,
+	// which startDaemonCfg does not wait for (it returns on the
+	// sync listener) — poll for it inside the same deadline
+	// instead of failing the test on a slow start (job 009:
+	// this race flaked ~1 in 6 runs under load).
+	var token string
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		tok, err := webui.ReadToken(td.cfg.ConfigDir)
+		if err == nil {
+			token = tok
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("read UI token: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	c := &uiClient{base: fmt.Sprintf("http://127.0.0.1:%d", port), token: token, hc: &http.Client{Timeout: 5 * time.Second}}
-	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := c.get("/api/status"); err == nil {
 			return c
@@ -186,10 +199,16 @@ func TestWebUIStatusAndPauseResume(t *testing.T) {
 	if st["state"] != "running" {
 		t.Fatalf("state = %v, want running", st["state"])
 	}
+	// ui_addr is published by a polling goroutine once the web UI
+	// has bound (startWebUI), so under full-suite load the first
+	// status read can beat it; poll like waitUI does for the
+	// token instead of asserting on a single read (tester 009:
+	// flaked 1x in a parallel go test ./... run, ui_addr = <nil>).
 	wantAddr := fmt.Sprintf("127.0.0.1:%d", port)
-	if st["ui_addr"] != wantAddr {
-		t.Fatalf("ui_addr = %v, want %s", st["ui_addr"], wantAddr)
-	}
+	waitFor(t, "status reports ui_addr", 10*time.Second, func() bool {
+		st, err := ui.get("/api/status")
+		return err == nil && st["ui_addr"] == wantAddr
+	})
 	if _, err := ui.post("/api/pause", nil); err != nil {
 		t.Fatal(err)
 	}

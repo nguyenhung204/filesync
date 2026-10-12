@@ -1,15 +1,15 @@
-# FileSync Windows service uninstaller. Run from an ELEVATED PowerShell.
+﻿# FileSync Windows service uninstaller. Run from an ELEVATED PowerShell.
 $ErrorActionPreference = "Stop"
 
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Error "This script must run as Administrator (right-click PowerShell -> Run as administrator)."
+    Write-Error "Script này phải chạy với quyền Administrator (chuột phải vào PowerShell -> Run as administrator)."
     exit 1
 }
 
 $existing = Get-Service -Name FileSync -ErrorAction SilentlyContinue
 if (-not $existing) {
-    Write-Host "FileSync service is not installed."
+    Write-Host "Service FileSync chưa được cài."
     exit 0
 }
 sc.exe stop FileSync | Out-Null
@@ -42,9 +42,9 @@ if (($lastStatus -ne "Stopped") -and ($pendingStates -contains $lastStatus)) {
         }
     }
     if ($svcPid -gt 0) {
-        Write-Host "FileSync service is stuck in state $lastStatus; killing its own process (PID $svcPid)."
+        Write-Host "Service FileSync đang treo ở trạng thái $lastStatus; đang tắt tiến trình của chính nó (PID $svcPid)."
         taskkill.exe /PID $svcPid /F | Out-Null
-        if ($LASTEXITCODE -ne 0) { Write-Error "taskkill failed ($LASTEXITCODE)"; exit 1 }
+        if ($LASTEXITCODE -ne 0) { Write-Error "taskkill thất bại ($LASTEXITCODE)"; exit 1 }
         $deadline = (Get-Date).AddSeconds(5)
         do {
             $svcNow = Get-Service -Name FileSync -ErrorAction SilentlyContinue
@@ -57,11 +57,11 @@ if (($lastStatus -ne "Stopped") -and ($pendingStates -contains $lastStatus)) {
 }
 
 if ($lastStatus -ne "Stopped") {
-    Write-Error "FileSync service did not stop within the timeout (last status: $lastStatus)."
+    Write-Error "Service FileSync không dừng trong thời gian cho phép (trạng thái cuối: $lastStatus)."
     exit 1
 }
 sc.exe delete FileSync | Out-Null
-if ($LASTEXITCODE -ne 0) { Write-Error "sc.exe delete failed ($LASTEXITCODE)"; exit 1 }
+if ($LASTEXITCODE -ne 0) { Write-Error "sc.exe delete thất bại ($LASTEXITCODE)"; exit 1 }
 
 # Do not claim removal until the service is really gone.
 $deadline = (Get-Date).AddSeconds(15)
@@ -73,8 +73,15 @@ do {
 } while ((Get-Date) -lt $deadline)
 
 if ($remaining) {
-    Write-Error "FileSync service still exists 15 seconds after sc.exe delete (status: $($remaining.Status))."
+    Write-Error "Service FileSync vẫn còn sau 15 giây kể từ khi sc.exe delete (trạng thái: $($remaining.Status))."
     exit 1
 }
 
-Write-Host "FileSync service removed. (User data and config were left untouched.)"
+# Remove the firewall rules the installer added (job 009
+# addendum). Best-effort: a rule already deleted by hand is not
+# an error.
+foreach ($name in @("FileSync (TCP 22000)", "FileSync (UDP 5353)")) {
+    netsh.exe advfirewall firewall delete rule name="$name" | Out-Null
+}
+
+Write-Host "Đã gỡ service FileSync. (Dữ liệu người dùng và cấu hình được giữ nguyên.)"

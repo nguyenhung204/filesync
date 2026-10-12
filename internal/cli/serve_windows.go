@@ -164,6 +164,14 @@ func callErrno(err error) uint32 {
 // its own thread once the dispatcher connects (D3).
 func (h *serviceHost) serviceMain(argc uint32, argv **uint16) uintptr {
 	ctx := context.Background()
+	// The run context and its cancel are installed BEFORE the
+	// control handler is registered (job 008 approver NIT 1): the
+	// handler can receive STOP the instant registration succeeds,
+	// and a cancel stored afterwards could miss that first stop.
+	runCtx, cancel := context.WithCancel(ctx)
+	h.mu.Lock()
+	h.cancel = cancel
+	h.mu.Unlock()
 	namePtr, err := syscall.UTF16PtrFromString(serviceName)
 	if err != nil {
 		h.runErr = fmt.Errorf("filesync: service name: %w", err)
@@ -182,10 +190,6 @@ func (h *serviceHost) serviceMain(argc uint32, argv **uint16) uintptr {
 	if !h.setStatus(stateStartPending, 0, 1, startWaitHintMs, 0) {
 		h.log.Warn(ctx, "serve: reporting START_PENDING to SCM failed")
 	}
-	runCtx, cancel := context.WithCancel(ctx)
-	h.mu.Lock()
-	h.cancel = cancel
-	h.mu.Unlock()
 
 	runErr := h.d.RunWithReady(runCtx, func() {
 		if !h.setStatus(stateRunning, acceptStop|acceptShutdown, 0, 0, 0) {

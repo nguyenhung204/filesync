@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -108,5 +109,39 @@ func TestRunWithReadySkippedOnStartupError(t *testing.T) {
 	}
 	if got := calls.Load(); got != 0 {
 		t.Errorf("onReady called %d times for a failed startup, want 0", got)
+	}
+}
+
+// The pre-bind Serve failure branch of the ready gate (job
+// 008b): when the transport dies BEFORE it ever binds (here the
+// listen port is already taken), onReady must stay unfired and
+// RunWithReady must surface the serve error — the SCM host maps
+// that to a STOPPED report with a non-zero exit code instead of
+// a false RUNNING. Reviewer 008b verified this ad hoc; this test
+// locks it in (job 009 inherited item c).
+func TestRunWithReadySkippedWhenServeFailsBeforeBind(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	d, _ := newReadyTestDaemon(t)
+	d.cfg.ListenAddr = ln.Addr().String() // occupied: bind must fail
+
+	var calls atomic.Int32
+	done := make(chan error, 1)
+	go func() {
+		done <- d.RunWithReady(context.Background(), func() { calls.Add(1) })
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("RunWithReady returned nil although the transport could not bind")
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("RunWithReady did not return after the pre-bind serve failure")
+	}
+	if got := calls.Load(); got != 0 {
+		t.Errorf("onReady called %d times when Serve failed before bind, want 0", got)
 	}
 }

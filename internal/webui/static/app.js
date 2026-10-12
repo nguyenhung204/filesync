@@ -1,15 +1,17 @@
 "use strict";
-// FileSync web UI: render trang quản lý từ JSON API của daemon.
-// Thuần JS, không framework, không request ra ngoài. Mọi thay đổi
-// trạng thái là POST; thao tác phá huỷ luôn confirm() trước — và
-// server tự kiểm tra lại mọi điều kiện (không tin client).
+// FileSync web UI — lõi (job 009): helpers, bản đồ lỗi tiếng
+// Việt (D7), poll trạng thái 1s, màn hình chính (panel Đang
+// chuyển hai chiều, danh sách file, thẻ thiết bị/điều khiển),
+// các tab Máy đã ghép đôi / Xung đột / Lịch sử. Ghép nối nằm ở
+// pairing.js, kéo-thả ở upload.js. Thuần JS, không framework,
+// không request ra ngoài; mọi thay đổi trạng thái là POST.
 
 const $ = (id) => document.getElementById(id);
 
 function esc(s) {
-  // Thoát đủ 5 ký tự: dữ liệu từ xa (tên peer, đường dẫn file) cũng
-  // được nội suy vào thuộc tính nháy đơn (data-name='...' v.v.) nên
-  // thiếu ' là vỡ thuộc tính — lỗ hổng XSS round 1 job 006.
+  // Thoát đủ 5 ký tự: dữ liệu từ xa (tên peer, đường dẫn file)
+  // cũng được nội suy vào thuộc tính nháy đơn (data-name='...'
+  // v.v.) nên thiếu ' là vỡ thuộc tính — lỗ hổng XSS job 006.
   return String(s == null ? "" : s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
@@ -19,7 +21,12 @@ async function api(path, opts) {
   const res = await fetch(path, opts);
   let body = null;
   try { body = await res.json(); } catch (e) { /* lỗi tĩnh */ }
-  if (!res.ok) throw new Error((body && body.error) || ("HTTP " + res.status));
+  if (!res.ok) {
+    const err = new Error((body && body.error) || ("HTTP " + res.status));
+    err.code = body && body.code;
+    err.status = res.status;
+    throw err;
+  }
   return body;
 }
 function post(path, data) {
@@ -29,6 +36,21 @@ function post(path, data) {
     body: JSON.stringify(data || {}),
   });
 }
+
+/* ---------- trạng thái dùng chung ---------- */
+const FS = {
+  status: null,        // StatusView gần nhất
+  peers: [],           // PeerView gần nhất
+  files: [],           // FileView gần nhất
+  onStatus: [],        // hook fn(status) sau mỗi poll status
+  onPeers: [],         // hook fn(peers) sau mỗi poll peers
+  activeTab: "home",
+  peerName(id) {
+    const p = FS.peers.find((x) => x.device_id === id);
+    if (p && p.name) return p.name;
+    return id ? id.slice(0, 8) + "…" : "máy kia";
+  },
+};
 
 /* ---------- thông báo + trạng thái chờ ---------- */
 function toast(msg, kind) {
@@ -62,13 +84,76 @@ function fmtTime(unixNano) {
   if (!unixNano) return "chưa từng";
   return new Date(unixNano / 1e6).toLocaleString("vi-VN");
 }
+function baseName(p) {
+  const i = String(p).lastIndexOf("/");
+  return i >= 0 ? p.slice(i + 1) : p;
+}
 // Fingerprint: tách thành từng nhóm 4 ký tự để mắt đối chiếu dễ.
 function fingerprintHTML(fp) {
   return "<div class='fingerprint'>" +
     esc(fp).split(" ").map((g) => "<span>" + g + "</span>").join("") + "</div>";
 }
+function kv(k, v) { return "<dt>" + k + "</dt><dd>" + v + "</dd>"; }
 
-/* ---------- Tổng quan ---------- */
+/* ---------- bản đồ lỗi tiếng Việt (D7) ---------- */
+// explainError(code, rawMessage) -> {title, hint}. Mọi lỗi hiển
+// thị cho người dùng đều qua đây: tiêu đề + gợi ý bằng lời
+// thường; thông tin gốc (mã + message) thu vào <details>.
+const ERROR_TEXT = {
+  disk_full: ["Máy đã hết dung lượng trống",
+    "Giải phóng bớt dung lượng trên máy đó rồi FileSync sẽ tự chuyển tiếp, không cần làm gì thêm."],
+  chunk_checksum: ["Dữ liệu nhận về không khớp",
+    "FileSync sẽ tự tải lại phần bị lỗi ở vòng đồng bộ sau."],
+  bad_remote_path: ["Tên file không hợp lệ",
+    "Đổi tên file ở máy kia (tránh ký tự đặc biệt cuối tên/ký tự cấm của Windows) rồi chờ đồng bộ lại."],
+  locked: ["File đang bị chương trình khác mở",
+    "Đóng chương trình đang mở file đích (Word/Excel…) rồi bấm Thử lại."],
+  invalid_path: ["Tên hoặc đường dẫn file không hợp lệ",
+    "Đổi tên file ngắn gọn, tránh ký tự đặc biệt rồi thử lại."],
+  meta_path: ["Không thể tải vào thư mục hệ thống của FileSync",
+    "Hãy thả file vào vị trí khác trong thư mục đồng bộ."],
+  dial_failed: ["Không nối được tới máy kia",
+    "Kiểm tra: máy kia đang mở FileSync, hai máy đang cùng một mạng Wi-Fi/LAN, và địa chỉ đã gõ đúng chưa."],
+  pair_code: ["Mã ghép nối không đúng hoặc đã hết hạn",
+    "Tạo mã mới ở máy kia rồi nhập lại. Mã chỉ dùng được trong 5 phút."],
+  internal: ["Có lỗi khi đồng bộ",
+    "FileSync sẽ tự thử lại. Nếu lỗi lặp lại nhiều lần, hãy tắt và mở lại FileSync trên cả hai máy."],
+};
+function explainError(code, raw) {
+  if (code && ERROR_TEXT[code]) {
+    const t = ERROR_TEXT[code];
+    return { title: t[0], hint: t[1] };
+  }
+  const t = ERROR_TEXT.internal;
+  return { title: t[0], hint: t[1] };
+}
+// errorHTML renders một lỗi đầy đủ: tiêu đề + gợi ý + chi tiết
+// kỹ thuật thu gọn. raw/code là dữ liệu từ xa tiềm ẩn — luôn esc.
+function errorHTML(code, raw) {
+  const e = explainError(code, raw);
+  let h = "<div class='err-box'><div class='err-title'>" + esc(e.title) + "</div>" +
+    "<div class='err-hint'>" + esc(e.hint) + "</div>";
+  if (raw || code) {
+    h += "<details class='tech'><summary>Chi tiết kỹ thuật</summary><pre>" +
+      esc((code ? "[" + code + "] " : "") + (raw || "")) + "</pre></details>";
+  }
+  return h + "</div>";
+}
+// classifyDialError: lỗi dial ghép nối không có mã ổn định ở
+// tầng pairing; phân loại theo nội dung message an toàn của nó.
+function classifyDialError(err) {
+  const raw = (err && err.message) || "";
+  if (/proof invalid|exactly 6 digits|expired|unknown session/i.test(raw)) return "pair_code";
+  return "dial_failed";
+}
+
+/* ---------- Trạng thái + Trang chính ---------- */
+function setPill(cls, text) {
+  const p = $("conn-state");
+  p.className = "pill " + cls;
+  p.innerHTML = "<span class='dot'></span>" + esc(text);
+}
+
 async function loadStatus() {
   let st;
   try { st = await api("/api/status"); }
@@ -76,7 +161,7 @@ async function loadStatus() {
     setPill("pill-red", "Mất kết nối tới daemon");
     return;
   }
-  window._lastStatus = st;
+  FS.status = st;
   if (st.paused) setPill("pill-amber", "Đã tạm dừng đồng bộ");
   else if (st.state === "running") setPill("pill-green", "Đang đồng bộ");
   else setPill("pill-gray", st.state);
@@ -85,18 +170,19 @@ async function loadStatus() {
   $("stat-files").textContent = st.indexed_files;
   $("stat-sent").textContent = fmtBytes(st.bytes_sent);
   $("stat-recv").textContent = fmtBytes(st.bytes_received);
-  $("stat-rate").textContent = fmtBytes(st.rateBps || st.rate_bps || 0) + "/s";
+  $("stat-rate").textContent = fmtBytes(st.rate_bps || 0) + "/s";
   $("btn-pause").disabled = !!st.paused;
   $("btn-resume").disabled = !st.paused;
+  const ownAddr = (st.lan_addrs && st.lan_addrs[0]) || st.listen_addr || "";
   $("overview-body").innerHTML =
     "<dl class='kv'>" +
     kv("Tên thiết bị", esc(st.device_name)) +
     kv("Device ID", "<span class='mono'>" + esc(st.device_id) + "</span>") +
-    kv("Địa chỉ lắng nghe", "<span class='mono'>" + esc(st.listen_addr) + "</span>") +
+    kv("Địa chỉ của máy này", "<span class='mono'>" + esc(ownAddr) + "</span>") +
     kv("Thư mục đồng bộ", esc(st.sync_dir)) +
     kv("Số vòng đã đồng bộ", st.rounds) +
-    "</dl><div class='hint'>Fingerprint của máy này (đọc cho máy kia đối chiếu khi ghép đôi):</div>" +
-    fingerprintHTML(st.fingerprint);
+    "</dl><div class='hint'>Hình và dãy từ này là “căn cước” của máy bạn — máy kia sẽ thấy y hệt khi ghép nối:</div>" +
+    identityCardHTML(st.fingerprint, 56);
   const warn = $("skip-warning");
   if (st.skipped_version_archives > 0) {
     const last = st.last_version_skip;
@@ -104,34 +190,112 @@ async function loadStatus() {
       (last ? ": gần nhất là " + last.path + " (" + fmtBytes(last.size) + ")." : ".");
     warn.classList.remove("hidden");
   } else warn.classList.add("hidden");
-  const qb = $("queue-box");
-  if (st.queue && st.queue.length) {
-    qb.innerHTML = "<div class='card'><h2>Đang truyền</h2>" + st.queue.map((q) => {
-      const pct = q.BytesTotal > 0 ? Math.round(100 * q.BytesDone / q.BytesTotal) : 0;
-      return "<div class='mono'>" + esc(q.Path) + " — " + pct + "% (" + esc(q.State) + ")</div>";
-    }).join("") + "</div>";
-  } else qb.innerHTML = "";
+  renderTransfers(st);
+  renderRecentErrors(st);
+  renderOfflineBanner();
+  renderHomeFiles();
+  for (const fn of FS.onStatus) { try { fn(st); } catch (e) { /* hook lỗi không được làm chết poll */ } }
+}
+
+function renderOfflineBanner() {
+  const el = $("offline-banner");
+  const off = FS.peers.filter((p) => !p.revoked && !p.connected);
+  if (!off.length) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+  el.innerHTML = "Máy <strong>" + esc(off[0].name || "kia") + "</strong> đang không trực tuyến — " +
+    "file mới sẽ tự chuyển khi máy đó mở lại.";
+  el.classList.remove("hidden");
+}
+
+function progressHTML(done, total, state) {
+  const pct = total > 0 ? Math.min(100, Math.round(100 * done / total)) : 0;
+  // cls là hằng nội bộ (không phải dữ liệu ngoài) — chọn nguyên
+  // chuỗi literal để bộ quét XSS của job 006 không phải nới lệ.
+  const bar = state === "failed" ? "<i class='failed'" : (pct >= 100 ? "<i class='done'" : "<i");
+  return "<div class='progress'>" + bar + " style='width:" + pct + "%'></i></div>" +
+    "<div class='hint'>" + pct + "% · " + fmtBytes(done) + " / " + fmtBytes(total) + "</div>";
+}
+
+function renderTransfers(st) {
+  const sends = st.sends || [];
+  const queue = st.queue || [];
+  // Rỗng -> panel thu gọn 1 dòng (.idle trong style.css).
+  $("transfers-panel").classList.toggle("idle", sends.length + queue.length === 0);
+  $("transfers-empty").classList.toggle("hidden", sends.length + queue.length > 0);
+  $("sending-title").classList.toggle("hidden", !sends.length);
+  $("receiving-title").classList.toggle("hidden", !queue.length);
+  $("sending-list").innerHTML = sends.map((s) =>
+    "<div class='transfer-item'><div class='transfer-head'>" +
+    "<span class='transfer-name' title='" + esc(s.Path) + "'>" + esc(baseName(s.Path)) + "</span>" +
+    "<span class='transfer-peer'>tới máy " + esc(FS.peerName(s.PeerID)) + "</span></div>" +
+    progressHTML(s.BytesDone, s.BytesTotal, s.State) + "</div>"
+  ).join("");
+  $("receiving-list").innerHTML = queue.map((q) => {
+    let h = "<div class='transfer-item'><div class='transfer-head'>" +
+      "<span class='transfer-name' title='" + esc(q.Path) + "'>" + esc(baseName(q.Path)) + "</span>" +
+      "<span class='transfer-peer'>từ máy " + esc(FS.peerName(q.PeerID)) + "</span></div>";
+    if (q.State === "failed") {
+      h += errorHTML(q.Err, q.Path);
+    } else {
+      if (q.State === "deferred") {
+        h += "<div class='hint'>Đang chờ (thiếu dung lượng hoặc máy bận), FileSync sẽ tự thử lại.</div>";
+      }
+      h += progressHTML(q.BytesDone, q.BytesTotal, q.State);
+    }
+    return h + "</div>";
+  }).join("");
+}
+
+function renderRecentErrors(st) {
   const errs = $("recent-errors");
-  if (st.recent_errors && st.recent_errors.length) {
-    errs.innerHTML = "<h2>Lỗi gần đây</h2>" + st.recent_errors.map((e) =>
-      "<div class='error-text mono'>[" + esc(e.Code) + "] " + esc(e.Path) + " — " + esc(e.Message) + "</div>").join("");
-  } else errs.innerHTML = "";
+  const list = st.recent_errors || [];
+  if (!list.length) { errs.innerHTML = ""; return; }
+  errs.innerHTML = "<h3>Lỗi gần đây</h3>" + list.map((e) =>
+    errorHTML(e.Code, (e.Path ? e.Path + " — " : "") + (e.Message || ""))).join("");
 }
-function kv(k, v) { return "<dt>" + k + "</dt><dd>" + v + "</dd>"; }
-function setPill(cls, text) {
-  const p = $("conn-state");
-  p.className = "pill " + cls;
-  p.innerHTML = "<span class='dot'></span>" + esc(text);
+
+function renderHomeFiles() {
+  const el = $("home-files");
+  if (!el) return;
+  const sending = new Set((FS.status && FS.status.sends || []).map((s) => s.Path));
+  const receiving = new Set((FS.status && FS.status.queue || []).map((q) => q.Path));
+  if (!FS.files.length) {
+    el.innerHTML = "<p class='hint'>Chưa có file nào. Hãy kéo file vào khung phía trên, hoặc copy file vào thư mục đồng bộ.</p>";
+    return;
+  }
+  el.innerHTML = FS.files.map((f) => {
+    let tag = "<span class='tag'>Trên máy này</span>";
+    if (sending.has(f.path)) tag = "<span class='tag tag-send'>Đang gửi</span>";
+    else if (receiving.has(f.path)) tag = "<span class='tag tag-recv'>Đang nhận</span>";
+    return "<div class='file-row'><span class='file-name'>" + esc(f.path) + "</span>" +
+      "<span>" + tag + " <span class='hint'>" + fmtBytes(f.size) + "</span></span></div>";
+  }).join("");
 }
+
+async function loadFiles() {
+  try {
+    FS.files = await api("/api/files");
+    $("files-list").innerHTML = FS.files.map((f) => "<option value='" + esc(f.path) + "'>").join("");
+    renderHomeFiles();
+  } catch (e) { /* lần poll sau thử lại */ }
+}
+FS.loadFiles = loadFiles;
 
 /* ---------- Máy đã ghép đôi ---------- */
 async function loadPeers() {
-  const peers = await api("/api/peers");
-  if (!peers.length) {
-    $("peers-body").innerHTML = "<div class='card empty'>Chưa ghép đôi với máy nào.<br>Hãy sang thẻ “Ghép đôi” để bắt đầu.</div>";
+  try { FS.peers = await api("/api/peers"); }
+  catch (e) { return; }
+  renderPeers();
+  renderOfflineBanner();
+  for (const fn of FS.onPeers) { try { fn(FS.peers); } catch (e) { /* như trên */ } }
+}
+
+function renderPeers() {
+  const el = $("peers-body");
+  if (!FS.peers.length) {
+    el.innerHTML = "<div class='card empty'>Chưa ghép đôi với máy nào.<br>Hãy sang thẻ “Ghép đôi” để bắt đầu.</div>";
     return;
   }
-  $("peers-body").innerHTML = peers.map((p) => {
+  el.innerHTML = FS.peers.map((p) => {
     const dot = p.revoked ? "dot-red" : (p.connected ? "dot-green" : "dot-gray");
     const state = p.revoked ? "Đã thu hồi quyền" : (p.connected ? "Đang kết nối" : "Ngoại tuyến");
     return "<div class='card peer-card'><div class='peer-main'>" +
@@ -144,48 +308,11 @@ async function loadPeers() {
       (p.revoked ? "" : "<button class='btn btn-danger' data-revoke='" + esc(p.device_id) + "' data-name='" + esc(p.name) + "'>Thu hồi</button>") +
       "</div>";
   }).join("");
-  document.querySelectorAll("[data-revoke]").forEach((btn) => {
+  el.querySelectorAll("[data-revoke]").forEach((btn) => {
     btn.addEventListener("click", () => withBusy(btn, async () => {
       const id = btn.getAttribute("data-revoke");
       if (!confirm("Thu hồi quyền của máy “" + btn.getAttribute("data-name") + "”?\nMáy đó sẽ bị ngắt kết nối ngay và không đồng bộ được nữa. Muốn dùng lại phải ghép đôi lại từ đầu.")) return;
       try { await post("/api/peers/revoke", { device_id: id }); toast("Đã thu hồi quyền của máy."); loadPeers(); }
-      catch (e) { toast(e.message, "err"); }
-    }));
-  });
-}
-
-/* ---------- Ghép đôi ---------- */
-let codeExpiresAt = 0;
-async function loadPending() {
-  const pending = await api("/api/pending");
-  const badge = $("pending-count");
-  badge.textContent = pending.length || "";
-  badge.classList.toggle("hidden", !pending.length);
-  if (!pending.length) { $("pending-body").textContent = "Không có yêu cầu nào."; return; }
-  $("pending-body").innerHTML = pending.map((p) =>
-    "<div class='card pending-card'><div class='peer-name'>⏳ " + esc(p.name) +
-    " <span class='hint'>đang xin ghép đôi</span></div>" +
-    "<div class='mono'>Device ID: " + esc(p.device_id) + "</div>" +
-    "<div class='hint'>Fingerprint của máy kia — đối chiếu kỹ từng nhóm với màn hình của máy đó:</div>" +
-    fingerprintHTML(p.fingerprint) +
-    "<div class='actions'>" +
-    "<button class='btn btn-good btn-big' data-confirm='" + esc(p.session_id) + "'>✓ Duyệt — fingerprint khớp</button>" +
-    "<button class='btn btn-danger btn-big' data-reject='" + esc(p.session_id) + "'>✕ Từ chối</button>" +
-    "</div></div>"
-  ).join("");
-  document.querySelectorAll("[data-confirm]").forEach((btn) => {
-    btn.addEventListener("click", () => withBusy(btn, async () => {
-      try {
-        await post("/api/pair/confirm", { session_id: btn.getAttribute("data-confirm") });
-        toast("Đã duyệt. Ghép đôi sẽ hoàn tất khi máy kia cũng duyệt.");
-        loadPending(); loadPeers();
-      } catch (e) { toast(e.message, "err"); }
-    }));
-  });
-  document.querySelectorAll("[data-reject]").forEach((btn) => {
-    btn.addEventListener("click", () => withBusy(btn, async () => {
-      if (!confirm("Từ chối yêu cầu ghép đôi này?")) return;
-      try { await post("/api/pair/reject", { session_id: btn.getAttribute("data-reject") }); toast("Đã từ chối yêu cầu."); loadPending(); }
       catch (e) { toast(e.message, "err"); }
     }));
   });
@@ -229,10 +356,6 @@ async function loadConflicts() {
 }
 
 /* ---------- Lịch sử phiên bản ---------- */
-async function loadFiles() {
-  const files = await api("/api/files");
-  $("files-list").innerHTML = files.map((f) => "<option value='" + esc(f.path) + "'>").join("");
-}
 async function loadHistory() {
   const path = $("history-path").value.trim();
   if (!path) { toast("Hãy nhập đường dẫn file trước.", "err"); return; }
@@ -264,12 +387,12 @@ document.querySelectorAll("nav .tab").forEach((btn) => {
     document.querySelectorAll("nav .tab").forEach((b) => b.classList.remove("active"));
     document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
     btn.classList.add("active");
-    $("tab-" + btn.getAttribute("data-tab")).classList.add("active");
-    const tab = btn.getAttribute("data-tab");
-    if (tab === "peers") loadPeers().catch((e) => toast(e.message, "err"));
-    if (tab === "conflicts") loadConflicts().catch((e) => toast(e.message, "err"));
-    if (tab === "history") loadFiles().catch(() => {});
-    if (tab === "pairing") loadPending().catch(() => {});
+    FS.activeTab = btn.getAttribute("data-tab");
+    $("tab-" + FS.activeTab).classList.add("active");
+    if (FS.activeTab === "peers") renderPeers();
+    if (FS.activeTab === "conflicts") loadConflicts().catch((e) => toast(e.message, "err"));
+    if (FS.activeTab === "history") loadFiles().catch(() => {});
+    if (FS.activeTab === "home") { loadFiles().catch(() => {}); loadStatus().catch(() => {}); }
   });
 });
 $("btn-pause").addEventListener("click", (ev) => withBusy(ev.currentTarget, async () => {
@@ -280,41 +403,12 @@ $("btn-resume").addEventListener("click", (ev) => withBusy(ev.currentTarget, asy
   try { await post("/api/resume"); toast("Đã tiếp tục đồng bộ."); loadStatus(); }
   catch (e) { toast(e.message, "err"); }
 }));
-$("btn-code").addEventListener("click", (ev) => withBusy(ev.currentTarget, async () => {
-  try {
-    const r = await post("/api/pair/code");
-    codeExpiresAt = r.expires_at;
-    $("code-value").textContent = r.code.split("").join(" ");
-    $("code-display").classList.remove("hidden");
-    tickCodeExpiry();
-    toast("Đã tạo mã ghép đôi. Đọc mã cho máy kia nhập vào.");
-  } catch (e) { toast(e.message, "err"); }
-}));
-function tickCodeExpiry() {
-  if (!codeExpiresAt) return;
-  const left = codeExpiresAt - Math.floor(Date.now() / 1000);
-  $("code-expiry").textContent = left > 0
-    ? "Mã còn hiệu lực " + Math.floor(left / 60) + ":" + String(left % 60).padStart(2, "0")
-    : "Mã đã hết hạn — hãy tạo mã mới.";
-}
-setInterval(tickCodeExpiry, 1000);
-$("btn-dial").addEventListener("click", (ev) => withBusy(ev.currentTarget, async () => {
-  const addr = $("dial-addr").value.trim();
-  const code = $("dial-code").value.replace(/\s+/g, "");
-  if (!addr || !code) { toast("Hãy nhập địa chỉ máy kia và mã 6 số.", "err"); return; }
-  try {
-    await post("/api/pair/dial", { addr: addr, code: code });
-    $("dial-msg").textContent = "";
-    toast("Đã kết nối tới máy kia. Hãy đối chiếu fingerprint trong mục chờ duyệt bên dưới rồi bấm Duyệt.");
-    loadPending();
-  } catch (e) { toast(e.message, "err"); }
-}));
 $("btn-history").addEventListener("click", (ev) => withBusy(ev.currentTarget, loadHistory));
 
 loadStatus().catch(() => {});
+loadPeers().catch(() => {});
+loadFiles().catch(() => {});
 loadConflicts().catch(() => {});
-loadPending().catch(() => {});
-setInterval(() => {
-  loadStatus().catch(() => {});
-  loadPending().catch(() => {});
-}, 3000);
+setInterval(() => { loadStatus().catch(() => {}); }, 1000);
+setInterval(() => { loadPeers().catch(() => {}); }, 3000);
+setInterval(() => { if (FS.activeTab === "home") loadFiles().catch(() => {}); }, 5000);

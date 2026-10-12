@@ -21,12 +21,15 @@ import (
 // fakeBackend records every call so tests can prove which Backend
 // methods a request did (or did NOT) reach.
 type fakeBackend struct {
-	mu        sync.Mutex
-	calls     []string
-	panicOn   string // method name that panics, "" = none
-	revokeErr error
-	peers     []PeerView
-	pending   []PendingView
+	mu          sync.Mutex
+	calls       []string
+	panicOn     string // method name that panics, "" = none
+	revokeErr   error
+	peers       []PeerView
+	pending     []PendingView
+	uploadErr   error // returned by Upload when set
+	uploadBytes int64 // bytes Upload streamed from the request body
+	uploadPath  string
 }
 
 func (f *fakeBackend) record(name string) {
@@ -89,6 +92,21 @@ func (f *fakeBackend) Versions(string) ([]VersionView, error) {
 func (f *fakeBackend) Restore(path, _ string) (VersionView, error) {
 	f.record("Restore")
 	return VersionView{Name: "v1", Path: path, Size: 3}, nil
+}
+func (f *fakeBackend) Upload(_ context.Context, relPath string, _ int64, r io.Reader) (string, int64, error) {
+	f.record("Upload")
+	// Stream-count like the real backend: the point is to prove
+	// the handler passes the body through without buffering. The
+	// fake's "clean path" is the path unchanged.
+	n, err := io.Copy(io.Discard, r)
+	f.mu.Lock()
+	f.uploadBytes = n
+	f.uploadPath = relPath
+	f.mu.Unlock()
+	if f.uploadErr != nil {
+		return "", 0, f.uploadErr
+	}
+	return relPath, n, err
 }
 
 const testPort = 22080

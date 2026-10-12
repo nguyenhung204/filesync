@@ -70,6 +70,9 @@ func (e *env) promptConfirm(pp pairing.PendingPair) bool {
 	}
 	fmt.Fprintf(e.stdout, "peer: %s (device %s…)\n", name, shortID(pp.DeviceID))
 	fmt.Fprintf(e.stdout, "peer fingerprint: %s\n", pp.Fingerprint)
+	if words := fingerprintWords(pp.Fingerprint); len(words) == 8 {
+		fmt.Fprintf(e.stdout, "Từ đối chiếu: %s\n", strings.Join(words, " · "))
+	}
 	fmt.Fprint(e.stdout, "confirm pairing? [y/N] ")
 	reader := bufio.NewReader(e.stdin)
 	line, _ := reader.ReadString('\n')
@@ -255,7 +258,7 @@ func (e *env) pairStandalone(to, code string, deadline time.Time) int {
 		topts.MDNSEnabled = false
 	}
 	tm := transport.NewManager(id, cfg, st, log, topts)
-	pm := pairing.NewManager(id, st, log, tm, pairing.Options{})
+	pm := pairing.NewManager(id, st, log, tm, pairing.Options{Name: cfg.DeviceName})
 	tm.SetPairingGate(pm)
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()

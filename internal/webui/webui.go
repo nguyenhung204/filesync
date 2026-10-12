@@ -2,9 +2,11 @@
 // page: a single-page UI plus a small JSON API on 127.0.0.1 only
 // (job 006). It is a thin shell over the daemon's existing
 // internal APIs, reached through the Backend interface — this
-// package never imports the daemon package, and it adds no new
-// way to write user data. Standard library only; the page assets
-// are embedded with go:embed.
+// package never imports the daemon package. Job 009 adds one
+// deliberate write path, browser file upload (spec D4), which
+// still goes only through the Backend (the daemon validates and
+// streams it into the sync dir with safefile). Standard library
+// only; the page assets are embedded with go:embed.
 package webui
 
 import (
@@ -13,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -21,6 +24,16 @@ import (
 
 	"filesync/internal/logx"
 	fsync "filesync/internal/sync"
+)
+
+// Upload refusal sentinels (job 009 spec D4): the daemon wraps
+// one of these and the upload handler maps it to an HTTP status
+// plus a stable machine code the UI translates for the user.
+var (
+	ErrInvalidPath = errors.New("webui: invalid upload path")
+	ErrMetaPath    = errors.New("webui: upload into metadata tree")
+	ErrDiskFull    = errors.New("webui: insufficient disk space")
+	ErrLocked      = errors.New("webui: destination file locked")
 )
 
 //go:embed static
@@ -36,22 +49,30 @@ type Options struct {
 // StatusView is the JSON shape of GET /api/status: the daemon's
 // status snapshot plus the UI address.
 type StatusView struct {
-	Version                int                `json:"version"`
-	State                  string             `json:"state"`
-	PID                    int                `json:"pid"`
-	DeviceID               string             `json:"device_id"`
-	DeviceName             string             `json:"device_name"`
-	Fingerprint            string             `json:"fingerprint"`
-	ListenAddr             string             `json:"listen_addr"`
-	UIAddr                 string             `json:"ui_addr,omitempty"`
-	SyncDir                string             `json:"sync_dir"`
-	ConfigDir              string             `json:"config_dir"`
-	StartedAt              int64              `json:"started_at"`
-	UpdatedAt              int64              `json:"updated_at"`
-	Paused                 bool               `json:"paused"`
-	IndexedFiles           int                `json:"indexed_files"`
-	InitialScanMs          int64              `json:"initial_scan_ms"`
-	Queue                  []fsync.PullState  `json:"queue"`
+	Version       int               `json:"version"`
+	State         string            `json:"state"`
+	PID           int               `json:"pid"`
+	DeviceID      string            `json:"device_id"`
+	DeviceName    string            `json:"device_name"`
+	Fingerprint   string            `json:"fingerprint"`
+	ListenAddr    string            `json:"listen_addr"`
+	UIAddr        string            `json:"ui_addr,omitempty"`
+	SyncDir       string            `json:"sync_dir"`
+	ConfigDir     string            `json:"config_dir"`
+	StartedAt     int64             `json:"started_at"`
+	UpdatedAt     int64             `json:"updated_at"`
+	Paused        bool              `json:"paused"`
+	IndexedFiles  int               `json:"indexed_files"`
+	InitialScanMs int64             `json:"initial_scan_ms"`
+	Queue         []fsync.PullState `json:"queue"`
+	// Job 009 additive view fields: Sends mirrors Queue for the
+	// outgoing direction (spec D3/D5); Discovered is the LAN
+	// nearby-machines list for the pairing wizard (addendum);
+	// LANAddrs are this machine's own dial addresses to read out
+	// while pairing.
+	Sends                  []fsync.SendState  `json:"sends"`
+	Discovered             []DiscoveredView   `json:"discovered"`
+	LANAddrs               []string           `json:"lan_addrs"`
 	BytesSent              int64              `json:"bytes_sent"`
 	BytesReceived          int64              `json:"bytes_received"`
 	RateBps                int64              `json:"rate_bps"`
@@ -85,6 +106,17 @@ type PendingView struct {
 	Fingerprint string `json:"fingerprint"`
 }
 
+// DiscoveredView is one unpaired FileSync machine announcing on
+// the LAN (job 009 addendum). The wizard offers it as a one-tap
+// dial target; trust still comes only from the code + manual
+// fingerprint confirmation flow.
+type DiscoveredView struct {
+	DeviceID string `json:"device_id"`
+	Name     string `json:"name"`
+	Addr     string `json:"addr"`
+	LastSeen int64  `json:"last_seen"` // UnixNano
+}
+
 // FileView is one live indexed file (history tab source list).
 type FileView struct {
 	Path string `json:"path"`
@@ -116,6 +148,14 @@ type Backend interface {
 	Files() ([]FileView, error)
 	Versions(path string) ([]VersionView, error)
 	Restore(path, version string) (VersionView, error)
+	// Upload streams one browser-supplied file into the sync dir
+	// (spec D4). sizeHint is the request ContentLength, or -1
+	// when unknown (chunked). It returns the validated clean
+	// path the file was actually written to (spec D4: the
+	// response reports the clean path, not the raw query value)
+	// and the byte count. Errors wrap the Err* sentinels below
+	// so the handler can map them to a stable code.
+	Upload(ctx context.Context, relPath string, sizeHint int64, r io.Reader) (string, int64, error)
 }
 
 // Server is the loopback HTTP server. The zero value is not
@@ -209,8 +249,13 @@ func (s *Server) routes() http.Handler {
 		static = http.FileServer(http.FS(sub))
 	}
 	mux.HandleFunc("GET /", s.handleRoot)
+	mux.Handle("GET /words.js", static)
 	mux.Handle("GET /app.js", static)
+	mux.Handle("GET /pairing.js", static)
+	mux.Handle("GET /upload.js", static)
 	mux.Handle("GET /style.css", static)
+	mux.Handle("GET /logo.png", static)
+	mux.Handle("GET /favicon.ico", static)
 	mux.HandleFunc("GET /api/status", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.backend.Overview())
 	})
@@ -234,6 +279,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/peers/revoke", s.handleRevoke)
 	mux.HandleFunc("POST /api/conflicts/resolve", s.handleResolve)
 	mux.HandleFunc("POST /api/restore", s.handleRestore)
+	mux.HandleFunc("POST /api/upload", s.handleUpload)
 	// Chain (outermost first): recover -> host -> auth -> origin(post).
 	return s.recoverMiddleware(s.hostMiddleware(s.authMiddleware(s.originMiddleware(mux))))
 }

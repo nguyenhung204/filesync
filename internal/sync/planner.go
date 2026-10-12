@@ -69,7 +69,7 @@ func plan(local, remote []store.Entry, maxLen int) []Action {
 		// Entries inside our own metadata tree (.filesync/...) are
 		// rejected here too: a peer must never plant files into
 		// versions/ or trash/ (round-2 security BLOCKER 2).
-		if _, err := validate.ValidateRelPath(e.Path, maxLen); err != nil || isMetaTreePath(e.Path) {
+		if _, err := validate.ValidateRelPath(e.Path, maxLen); err != nil || IsMetaTreePath(e.Path) {
 			continue
 		}
 		remoteByPath[e.Path] = e
@@ -88,7 +88,7 @@ func plan(local, remote []store.Entry, maxLen int) []Action {
 		if r.Tombstone || handledRemote[r.Path] || len(r.Chunks) == 0 {
 			continue
 		}
-		if _, err := validate.ValidateRelPath(r.Path, maxLen); err != nil || isMetaTreePath(r.Path) {
+		if _, err := validate.ValidateRelPath(r.Path, maxLen); err != nil || IsMetaTreePath(r.Path) {
 			continue
 		}
 		// A live local entry at the destination blocks the rename:
@@ -278,7 +278,7 @@ func chunkListKey(chunks []chunk.ChunkMeta) string {
 	return sb.String()
 }
 
-// isMetaTreePath reports whether p is, or lives anywhere under,
+// IsMetaTreePath reports whether p is, or lives anywhere under,
 // a directory named like FileSync's own metadata directory
 // (.filesync). The local scanner prunes such a directory at ANY
 // depth and the watcher ignores events under one, so a local
@@ -301,7 +301,7 @@ func chunkListKey(chunks []chunk.ChunkMeta) string {
 // ſ→S which NTFS upcase also equates); U+0130 (İ) has no
 // uppercase mapping at all, so it stays a distinct, harmless
 // name on every target filesystem and is NOT rejected.
-func isMetaTreePath(p string) bool {
+func IsMetaTreePath(p string) bool {
 	metaUpper := strings.ToUpper(history.MetaDir)
 	for _, seg := range strings.Split(p, "/") {
 		if strings.EqualFold(seg, history.MetaDir) || strings.ToUpper(seg) == metaUpper {

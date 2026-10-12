@@ -72,6 +72,7 @@ type Engine struct {
 	mu       sync.Mutex
 	counters Counters
 	pulls    map[string]*PullState
+	sends    map[string]*SendState
 	errs     []SyncError
 
 	// Large-file archive-skip tracking (job 005, spec D5); guarded
@@ -117,6 +118,7 @@ func NewEngine(cfg config.Config, id *identity.Identity, st *store.Store, hist *
 		now:         now,
 		parallelism: par,
 		pulls:       make(map[string]*PullState),
+		sends:       make(map[string]*SendState),
 		pumps:       make(map[SessionConn]*connPump),
 		warnedSkips: make(map[string]bool),
 	}

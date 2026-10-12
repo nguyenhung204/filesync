@@ -6,7 +6,7 @@ import (
 )
 
 // psOutsideLiterals returns the parts of a PowerShell payload
-// that are NOT inside single-quoted string literals ('' inside a
+// that are NOT inside single-quoted string literals (” inside a
 // literal is an escaped quote, per PowerShell rules). Anything
 // dangerous in the output is live code; anything inside a literal
 // is inert data.
@@ -123,6 +123,8 @@ func TestSvcParseScQueryexPID(t *testing.T) {
 		{"not installed (1060)", svcQueryNotInstalled, 0, false},
 		{"garbage", "blah blah\n", 0, false},
 		{"pid not a number", "        PID                : abc\n", 0, false},
+		{"mid-line PID is not the field", "        FLAGS              : PID : 999\n", 0, false},
+		{"decoy line before real pid", "        SOME_PID           : 999\n        PID                : 6724\n", 6724, true},
 	}
 	for _, c := range cases {
 		got, ok := svcParseScQueryexPID(c.in)
@@ -173,5 +175,34 @@ func TestSvcPsQuote(t *testing.T) {
 	}
 	if got := svcPsQuote(`C:\plain\path`); got != `'C:\plain\path'` {
 		t.Errorf("svcPsQuote = %q", got)
+	}
+}
+
+// Job 009: the Desktop-shortcut removal payload and the
+// firewall delete builders used by uninstall-service.
+func TestSvcDesktopShortcutRemoveCommand(t *testing.T) {
+	cmd := svcDesktopShortcutRemoveCommand()
+	for _, want := range []string{
+		`[Environment]::GetFolderPath('Desktop')`,
+		`(Join-Path $desk 'FileSync.lnk')`,
+		"Remove-Item",
+		"SilentlyContinue",
+	} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("desktop remove command missing %q: %s", want, cmd)
+		}
+	}
+}
+
+func TestSvcFirewallDeleteCommands(t *testing.T) {
+	cmds := svcFirewallDeleteCommands()
+	if len(cmds) != 2 {
+		t.Fatalf("svcFirewallDeleteCommands = %d, want 2", len(cmds))
+	}
+	joined := strings.Join(cmds[0], " ") + "|" + strings.Join(cmds[1], " ")
+	for _, want := range []string{"FileSync (TCP 22000)", "FileSync (UDP 5353)", "delete", "rule"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("firewall delete commands missing %q: %s", want, joined)
+		}
 	}
 }

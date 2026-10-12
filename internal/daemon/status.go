@@ -8,6 +8,7 @@ import (
 
 	"filesync/internal/pairing"
 	"filesync/internal/sync"
+	"filesync/internal/transport"
 )
 
 // Status is the daemon's public snapshot. The JSON field names are
@@ -33,12 +34,17 @@ type Status struct {
 	InitialScanMs int64            `json:"initial_scan_ms"`
 	Peers         []PeerStatus     `json:"peers"`
 	Queue         []sync.PullState `json:"queue"`
-	BytesSent     int64            `json:"bytes_sent"`
-	BytesReceived int64            `json:"bytes_received"`
-	RateBps       int64            `json:"rate_bps"`
-	Rounds        int64            `json:"rounds"`
-	LastError     *sync.SyncError  `json:"last_error,omitempty"`
-	RecentErrors  []sync.SyncError `json:"recent_errors"`
+	// Job 009 additive fields (Version stays 1): Sends is the
+	// display-only send progress (spec D3/D5); Discovered lists
+	// unpaired machines announcing on the LAN (addendum).
+	Sends         []sync.SendState             `json:"sends"`
+	Discovered    []transport.DiscoveredDevice `json:"discovered"`
+	BytesSent     int64                        `json:"bytes_sent"`
+	BytesReceived int64                        `json:"bytes_received"`
+	RateBps       int64                        `json:"rate_bps"`
+	Rounds        int64                        `json:"rounds"`
+	LastError     *sync.SyncError              `json:"last_error,omitempty"`
+	RecentErrors  []sync.SyncError             `json:"recent_errors"`
 	// Large-file archive skips (job 005): additive fields, Version
 	// stays 1 — old consumers keep parsing.
 	SkippedVersionArchives int64                 `json:"skipped_version_archives"`
@@ -92,11 +98,15 @@ func (d *Daemon) Status() Status {
 		st.BytesReceived = c.BytesReceived
 		st.Rounds = c.Rounds
 		st.Queue = d.eng.ActivePulls()
+		st.Sends = d.eng.ActiveSends()
 		st.RecentErrors = d.eng.LastErrors()
 		st.SkippedVersionArchives, st.LastVersionSkip = d.eng.SkippedArchives()
 	}
 	if st.Queue == nil {
 		st.Queue = []sync.PullState{}
+	}
+	if st.Sends == nil {
+		st.Sends = []sync.SendState{}
 	}
 	if st.RecentErrors == nil {
 		st.RecentErrors = []sync.SyncError{}
@@ -126,6 +136,22 @@ func (d *Daemon) Status() Status {
 	}
 	if st.ActiveTransfers == nil {
 		st.ActiveTransfers = []string{}
+	}
+	// Discovered (job 009 addendum): machines announcing on the
+	// LAN that have NO store record here yet — anything already
+	// paired (or revoked) belongs to the peers list above, so
+	// the wizard's nearby list never double-shows a machine.
+	st.Discovered = []transport.DiscoveredDevice{}
+	if d.tm != nil {
+		known := make(map[string]bool, len(st.Peers))
+		for _, p := range st.Peers {
+			known[p.DeviceID] = true
+		}
+		for _, dev := range d.tm.Discovered() {
+			if !known[dev.DeviceID] {
+				st.Discovered = append(st.Discovered, dev)
+			}
+		}
 	}
 	st.PendingPairs = d.pendingListLocked()
 	return st
